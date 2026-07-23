@@ -793,6 +793,11 @@ export default function ModelViewer() {
     ],
     [draftNodeIds, editableFace, xDirectionNodeIds],
   );
+  const floorOrbitTarget = useMemo(() => {
+    if (!floorFaceId) return null;
+    const floor = faces.find((face) => face.id === floorFaceId);
+    return floor ? centroid(floor.vertices) : null;
+  }, [faces, floorFaceId]);
 
   const instruction =
     activeTab === "volume"
@@ -1184,6 +1189,7 @@ export default function ModelViewer() {
           selectedFaceIds={[...selectedFaceIds]}
           hoveredFaceId={hoveredFaceId}
           floorFaceId={floorFaceId}
+          orbitTarget={floorOrbitTarget}
           editableFaceId={editableFace?.id ?? null}
           volumeConfirmed={volumeConfirmed}
           pickTarget={

@@ -32,6 +32,7 @@ type Props = {
   selectedFaceIds: string[];
   hoveredFaceId: string | null;
   floorFaceId: string | null;
+  orbitTarget: Vec3 | null;
   editableFaceId: string | null;
   volumeConfirmed: boolean;
   pickTarget: PickTarget;
@@ -207,6 +208,7 @@ export default function PointCloudViewport({
   selectedFaceIds,
   hoveredFaceId,
   floorFaceId,
+  orbitTarget,
   editableFaceId,
   volumeConfirmed,
   pickTarget,
@@ -624,6 +626,25 @@ export default function PointCloudViewport({
     displayOffset.x,
     displayOffset.y,
     displayOffset.z,
+  ]);
+
+  useEffect(() => {
+    const state = sceneRef.current;
+    if (!state || !orbitTarget) return;
+    const displayTarget = basis ? toLocal(orbitTarget, basis) : orbitTarget;
+    const nextTarget = toThree(displayTarget, displayOffset);
+    const shift = nextTarget.clone().sub(state.controls.target);
+    state.camera.position.add(shift);
+    state.controls.target.copy(nextTarget);
+    state.camera.lookAt(nextTarget);
+    state.controls.update();
+    state.controls.saveState();
+  }, [
+    basis,
+    displayOffset.x,
+    displayOffset.y,
+    displayOffset.z,
+    orbitTarget,
   ]);
 
   useEffect(() => {
