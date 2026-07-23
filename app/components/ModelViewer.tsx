@@ -11,6 +11,12 @@ import { parseMctNodes } from "../lib/mctParser";
 import { createSampleMct } from "../lib/sampleModel";
 import { smartFaceFromSeed } from "../lib/smartSelect";
 import {
+  axisSliceFaceFromSeed,
+  fullPlaneFaceFromSeed,
+  localPatchFaceFromSeed,
+  type SmartAxis,
+} from "../lib/smartSelectVariants";
+import {
   loadWorkspace,
   saveWorkspace,
   type SavedWorkspace,
@@ -73,6 +79,10 @@ export default function ModelViewer() {
   const [faces, setFaces] = useState<VolumeFace[]>([]);
   const [definingFaces, setDefiningFaces] = useState(false);
   const [smartSelecting, setSmartSelecting] = useState(false);
+  const [smartVariant, setSmartVariant] = useState<
+    "classic" | "axis" | "local" | "full"
+  >("classic");
+  const [smartAxis, setSmartAxis] = useState<SmartAxis>("x");
   const [draftNodeIds, setDraftNodeIds] = useState<number[]>([]);
   const [selectedFaceIds, setSelectedFaceIds] = useState<Set<string>>(
     new Set(),
@@ -109,6 +119,13 @@ export default function ModelViewer() {
     () => new Set(faces.flatMap((face) => face.nodeIds)),
     [faces],
   );
+  const shapeEditingFaceId =
+    activeTab === "volume" &&
+    !definingFaces &&
+    !smartSelecting &&
+    selectedFaceIds.size === 1
+      ? [...selectedFaceIds][0]
+      : null;
 
   const displayNodes = useMemo(() => {
     if (!allNodes.length) return [];
@@ -117,15 +134,21 @@ export default function ModelViewer() {
     return allNodes.filter((node) => {
       let onFace = false;
       let onFaceEdge = false;
+      let onEditingFace = false;
       for (const face of faces) {
-        if (isPointWithinFace(node.global, face, tolerance)) onFace = true;
+        if (isPointWithinFace(node.global, face, tolerance)) {
+          onFace = true;
+          if (face.id === shapeEditingFaceId) onEditingFace = true;
+        }
         if (isPointOnFaceBoundary(node.global, face, tolerance)) {
           onFaceEdge = true;
         }
       }
 
       if (!volumeConfirmed) {
-        return !onFace || onFaceEdge || draftSet.has(node.id);
+        return (
+          !onFace || onFaceEdge || onEditingFace || draftSet.has(node.id)
+        );
       }
 
       const inside =
@@ -148,6 +171,7 @@ export default function ModelViewer() {
     draftNodeIds,
     faces,
     facePlanes,
+    shapeEditingFaceId,
     tolerance,
     volumeConfirmed,
   ]);
@@ -224,6 +248,8 @@ export default function ModelViewer() {
         setActiveTab(saved.activeTab);
         setDefiningFaces(saved.definingFaces);
         setSmartSelecting(saved.smartSelecting ?? false);
+        setSmartVariant(saved.smartVariant ?? "classic");
+        setSmartAxis(saved.smartAxis ?? "x");
         setDraftNodeIds(saved.draftNodeIds);
         setSelectedFaceIds(new Set(saved.selectedFaceIds));
         setVolumeConfirmed(saved.volumeConfirmed);
@@ -263,6 +289,8 @@ export default function ModelViewer() {
         activeTab,
         definingFaces,
         smartSelecting,
+        smartVariant,
+        smartAxis,
         draftNodeIds,
         selectedFaceIds: [...selectedFaceIds],
         volumeConfirmed,
@@ -291,6 +319,8 @@ export default function ModelViewer() {
     selectedFaceIds,
     selectedNode?.id,
     smartSelecting,
+    smartVariant,
+    smartAxis,
     slice,
     volumeConfirmed,
     workspaceReady,
@@ -407,11 +437,34 @@ export default function ModelViewer() {
   const smartPreviewFace = useMemo(() => {
     if (!smartSelecting || !hover) return null;
     try {
+      if (smartVariant === "axis") {
+        return axisSliceFaceFromSeed(
+          allNodes,
+          hover.node.id,
+          tolerance,
+          smartAxis,
+          basis,
+        );
+      }
+      if (smartVariant === "local") {
+        return localPatchFaceFromSeed(allNodes, hover.node.id, tolerance);
+      }
+      if (smartVariant === "full") {
+        return fullPlaneFaceFromSeed(allNodes, hover.node.id, tolerance);
+      }
       return smartFaceFromSeed(allNodes, hover.node.id, tolerance);
     } catch {
       return null;
     }
-  }, [allNodes, hover?.node.id, smartSelecting, tolerance]);
+  }, [
+    allNodes,
+    basis,
+    hover?.node.id,
+    smartAxis,
+    smartSelecting,
+    smartVariant,
+    tolerance,
+  ]);
 
   const applyCoordinateSystem = (
     nextDirectionNodeIds: number[],
@@ -452,10 +505,23 @@ export default function ModelViewer() {
 
     if (activeTab === "volume" && smartSelecting) {
       try {
-        const candidate =
-          hover?.node.id === nodeId && smartPreviewFace
-            ? smartPreviewFace
-            : smartFaceFromSeed(allNodes, nodeId, tolerance);
+        let candidate = smartPreviewFace;
+        if (hover?.node.id !== nodeId || !candidate) {
+          candidate =
+            smartVariant === "axis"
+              ? axisSliceFaceFromSeed(
+                  allNodes,
+                  nodeId,
+                  tolerance,
+                  smartAxis,
+                  basis,
+                )
+              : smartVariant === "local"
+                ? localPatchFaceFromSeed(allNodes, nodeId, tolerance)
+                : smartVariant === "full"
+                  ? fullPlaneFaceFromSeed(allNodes, nodeId, tolerance)
+                  : smartFaceFromSeed(allNodes, nodeId, tolerance);
+        }
         const face: VolumeFace = {
           ...candidate,
           id: `smart-${crypto.randomUUID()}`,
@@ -720,25 +786,14 @@ export default function ModelViewer() {
   }, [displayNodes, slice]);
 
   const editableFace = useMemo(() => {
-    if (
-      activeTab !== "volume" ||
-      definingFaces ||
-      smartSelecting ||
-      selectedFaceIds.size !== 1
-    ) {
-      return null;
-    }
+    if (!shapeEditingFaceId) return null;
     return (
-      faces.find((face) => selectedFaceIds.has(face.id) && face.nodeIds.length) ??
+      faces.find(
+        (face) => face.id === shapeEditingFaceId && face.nodeIds.length,
+      ) ??
       null
     );
-  }, [
-    activeTab,
-    definingFaces,
-    faces,
-    selectedFaceIds,
-    smartSelecting,
-  ]);
+  }, [faces, shapeEditingFaceId]);
 
   const invalidDraftNodeIds = useMemo(() => {
     if (draftNodeIds.length < 4) return [];
@@ -799,14 +854,44 @@ export default function ModelViewer() {
     return floor ? centroid(floor.vertices) : null;
   }, [faces, floorFaceId]);
 
+  const activateSmartSelect = (
+    variant: "classic" | "axis" | "local" | "full",
+  ) => {
+    const next = !smartSelecting || smartVariant !== variant;
+    setSmartSelecting(next);
+    setSmartVariant(variant);
+    setDefiningFaces(false);
+    setDraftNodeIds([]);
+    setVolumeConfirmed(false);
+    const descriptions = {
+      classic: "Hover an exterior connected planar patch, then click.",
+      axis: `Tracing the complete local ${smartAxis.toUpperCase()} coordinate plane. Mouse 4 cycles axes.`,
+      local: "Hover a node to fit a compact local tangent patch.",
+      full: "Hover a node to fit and trace its complete matching plane.",
+    };
+    setStatus(next ? descriptions[variant] : "Smart Select ended.");
+  };
+
+  const cycleSmartAxis = useCallback(() => {
+    setSmartAxis((current) => {
+      const next = current === "x" ? "y" : current === "y" ? "z" : "x";
+      setStatus(
+        `Smart Select 1 now traces the local ${next.toUpperCase()} plane.`,
+      );
+      return next;
+    });
+  }, []);
+
   const instruction =
     activeTab === "volume"
       ? definingFaces
         ? `${draftNodeIds.length} boundary points · Space closes face`
         : smartSelecting
           ? smartPreviewFace
-            ? "Click to add the highlighted face"
-            : "Hover an exterior planar patch"
+            ? smartVariant === "axis"
+              ? `Click to add local ${smartAxis.toUpperCase()} plane · Mouse 4 changes axis`
+              : "Click to add the highlighted face"
+            : "Hover a node to preview this method"
           : "Begin, Smart Select, or Auto-Define"
       : activeTab === "coordinates"
         ? !floorFaceId
@@ -931,23 +1016,40 @@ export default function ModelViewer() {
                 {definingFaces ? "Defining…" : "Begin"}
               </button>
               <button
-                className={`button ${smartSelecting ? "primary" : ""}`}
-                onClick={() => {
-                  setSmartSelecting((current) => {
-                    const next = !current;
-                    setStatus(
-                      next
-                        ? "Hover a planar exterior patch, then click to add it."
-                        : "Smart Select ended.",
-                    );
-                    return next;
-                  });
-                  setDefiningFaces(false);
-                  setDraftNodeIds([]);
-                  setVolumeConfirmed(false);
-                }}
+                className={`button ${
+                  smartSelecting && smartVariant === "classic" ? "primary" : ""
+                }`}
+                onClick={() => activateSmartSelect("classic")}
+                title="Connected exterior planar patch"
               >
                 Smart Select
+              </button>
+              <button
+                className={`button ${
+                  smartSelecting && smartVariant === "axis" ? "primary" : ""
+                }`}
+                onClick={() => activateSmartSelect("axis")}
+                title="Complete local coordinate plane; Mouse 4 cycles X, Y, and Z"
+              >
+                Smart Select 1 · {smartAxis.toUpperCase()}
+              </button>
+              <button
+                className={`button ${
+                  smartSelecting && smartVariant === "local" ? "primary" : ""
+                }`}
+                onClick={() => activateSmartSelect("local")}
+                title="Compact best-fit tangent patch around the hovered node"
+              >
+                Smart Select 2
+              </button>
+              <button
+                className={`button ${
+                  smartSelecting && smartVariant === "full" ? "primary" : ""
+                }`}
+                onClick={() => activateSmartSelect("full")}
+                title="Best-fit local plane expanded across all matching nodes"
+              >
+                Smart Select 3
               </button>
               <button className="button auto-wide" onClick={autoDefine}>
                 Auto-Define
@@ -967,6 +1069,29 @@ export default function ModelViewer() {
                     : `Trace ${3 - draftNodeIds.length} more point${
                         3 - draftNodeIds.length === 1 ? "" : "s"
                       }`}
+                </span>
+              </div>
+            )}
+
+            {smartSelecting && (
+              <div className="selection-callout smart-method-callout">
+                <strong>
+                  {smartVariant === "classic"
+                    ? "CONNECTED"
+                    : smartVariant === "axis"
+                      ? `AXIS ${smartAxis.toUpperCase()}`
+                      : smartVariant === "local"
+                        ? "LOCAL FIT"
+                        : "FULL PLANE"}
+                </strong>
+                <span>
+                  {smartVariant === "classic"
+                    ? "Exterior plane with connected-region growth"
+                    : smartVariant === "axis"
+                      ? "All nodes at one local coordinate · Mouse 4 cycles"
+                      : smartVariant === "local"
+                        ? "Compact tangent fit around the hovered node"
+                        : "Local plane fit expanded through the complete model"}
                 </span>
               </div>
             )}
@@ -1207,6 +1332,11 @@ export default function ModelViewer() {
           onPickFace={handleFacePick}
           onRemoveFaceVertex={removeFaceVertex}
           onInsertFaceVertex={insertFaceVertex}
+          onCycleSmartAxis={
+            smartSelecting && smartVariant === "axis"
+              ? cycleSmartAxis
+              : undefined
+          }
         />
 
         <div className="view-hud top-left">
@@ -1230,10 +1360,19 @@ export default function ModelViewer() {
 
         {hover && (
           <div
-            className="hover-label"
+            className={`hover-label ${
+              editableFace?.nodeIds.includes(hover.node.id)
+                ? "delete-ready"
+                : ""
+            }`}
             style={{ left: hover.clientX + 14, top: hover.clientY + 14 }}
           >
             <strong>NODE {hover.node.id}</strong>
+            {editableFace?.nodeIds.includes(hover.node.id) && (
+              <b className="delete-symbol" aria-hidden="true">
+                ×
+              </b>
+            )}
             <span>
               {(["x", "y", "z"] as const)
                 .map((axis) =>
@@ -1241,6 +1380,9 @@ export default function ModelViewer() {
                 )
                 .join(" · ")}
             </span>
+            {editableFace?.nodeIds.includes(hover.node.id) && (
+              <span>Right-click to remove vertex</span>
+            )}
           </div>
         )}
       </section>

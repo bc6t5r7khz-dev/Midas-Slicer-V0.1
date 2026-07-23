@@ -51,6 +51,7 @@ type Props = {
     edgeIndex: number,
     nodeId: number,
   ) => void;
+  onCycleSmartAxis?: () => void;
 };
 
 type SceneState = {
@@ -219,6 +220,7 @@ export default function PointCloudViewport({
   onPickFace,
   onRemoveFaceVertex,
   onInsertFaceVertex,
+  onCycleSmartAxis,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneState | null>(null);
@@ -237,6 +239,9 @@ export default function PointCloudViewport({
   const onPickFaceRef = useRef(onPickFace);
   const onRemoveFaceVertexRef = useRef(onRemoveFaceVertex);
   const onInsertFaceVertexRef = useRef(onInsertFaceVertex);
+  const onCycleSmartAxisRef = useRef(onCycleSmartAxis);
+  const displayOffsetRef = useRef<Vec3>({ x: 0, y: 0, z: 0 });
+  const toleranceRef = useRef(tolerance);
   const [renderError, setRenderError] = useState<string | null>(null);
 
   nodesRef.current = nodes;
@@ -250,6 +255,7 @@ export default function PointCloudViewport({
   onPickFaceRef.current = onPickFace;
   onRemoveFaceVertexRef.current = onRemoveFaceVertex;
   onInsertFaceVertexRef.current = onInsertFaceVertex;
+  onCycleSmartAxisRef.current = onCycleSmartAxis;
 
   const displayOffset = useMemo(() => {
     if (basis || !allNodes.length) return { x: 0, y: 0, z: 0 };
@@ -267,6 +273,8 @@ export default function PointCloudViewport({
       z: sum.z / allNodes.length,
     };
   }, [allNodes, basis]);
+  displayOffsetRef.current = displayOffset;
+  toleranceRef.current = tolerance;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -284,9 +292,11 @@ export default function PointCloudViewport({
       host.appendChild(renderer.domElement);
 
       const controls = new OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
-      controls.dampingFactor = 0.08;
+      controls.enableDamping = false;
       controls.screenSpacePanning = true;
+      controls.panSpeed = 1;
+      controls.zoomSpeed = 0.9;
+      controls.zoomToCursor = true;
       controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
       controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
       controls.mouseButtons.RIGHT = null as unknown as THREE.MOUSE;
@@ -318,7 +328,16 @@ export default function PointCloudViewport({
       raycaster.params.Points = { threshold: 1.2 };
       raycaster.params.Line = { threshold: 1.2 };
       const pointer = new THREE.Vector2();
-      let edgeDrag: { faceId: string; edgeIndex: number } | null = null;
+      let edgeDrag: {
+        faceId: string;
+        edgeIndex: number;
+        start: THREE.Vector3;
+        end: THREE.Vector3;
+        plane: THREE.Plane;
+        preview: THREE.Line;
+        snapNodeId: number | null;
+      } | null = null;
+      let hoveredEdge: THREE.Line | null = null;
       let suppressNextClick = false;
       let pointerStart: { x: number; y: number } | null = null;
 
@@ -347,6 +366,53 @@ export default function PointCloudViewport({
         });
       };
 
+      const setHoveredEdge = (edge: THREE.Line | null) => {
+        if (hoveredEdge === edge) return;
+        if (hoveredEdge) {
+          (hoveredEdge.material as THREE.LineBasicMaterial).color.setHex(
+            0x02070a,
+          );
+        }
+        hoveredEdge = edge;
+        if (hoveredEdge) {
+          (hoveredEdge.material as THREE.LineBasicMaterial).color.setHex(
+            0xffbf47,
+          );
+        }
+      };
+
+      const getSnapNode = (faceId: string, event: PointerEvent) => {
+        const face = facesRef.current.find((candidate) => candidate.id === faceId);
+        if (!face) return null;
+        const rect = renderer.domElement.getBoundingClientRect();
+        let closest:
+          | { node: ModelNode; point: THREE.Vector3; distance: number }
+          | null = null;
+        for (const node of nodesRef.current) {
+          if (face.nodeIds.includes(node.id)) continue;
+          const planeDistance = Math.abs(
+            face.plane.normal.x * node.global.x +
+              face.plane.normal.y * node.global.y +
+              face.plane.normal.z * node.global.z +
+              face.plane.constant,
+          );
+          if (planeDistance > toleranceRef.current * 2) continue;
+          const value = node.local ?? node.global;
+          const point = toThree(value, displayOffsetRef.current);
+          const projected = point.clone().project(camera);
+          const clientX = rect.left + ((projected.x + 1) / 2) * rect.width;
+          const clientY = rect.top + ((1 - projected.y) / 2) * rect.height;
+          const distance = Math.hypot(
+            clientX - event.clientX,
+            clientY - event.clientY,
+          );
+          if (distance <= 20 && (!closest || distance < closest.distance)) {
+            closest = { node, point, distance };
+          }
+        }
+        return closest;
+      };
+
       const handleMove = (event: PointerEvent) => {
         if (
           pointerStart &&
@@ -361,17 +427,52 @@ export default function PointCloudViewport({
         updatePointer(event);
         const faceHit = raycaster.intersectObjects(faceMeshesRef.current)[0];
         const faceId = faceHit?.object.userData.faceId as string | undefined;
+        const edgeHit = raycaster
+          .intersectObjects(faceEdgesRef.current)
+          .find(
+            (candidate) =>
+              candidate.object.userData.faceId === editableFaceIdRef.current,
+          );
+        let snappedNode: ModelNode | null = null;
+        if (!edgeDrag) {
+          setHoveredEdge((edgeHit?.object as THREE.Line | undefined) ?? null);
+        } else {
+          const snap = getSnapNode(edgeDrag.faceId, event);
+          const bend =
+            snap?.point ??
+            raycaster.ray.intersectPlane(
+              edgeDrag.plane,
+              new THREE.Vector3(),
+            );
+          edgeDrag.snapNodeId = snap?.node.id ?? null;
+          snappedNode = snap?.node ?? null;
+          if (bend) {
+            edgeDrag.preview.geometry.setFromPoints([
+              edgeDrag.start,
+              bend,
+              edgeDrag.end,
+            ]);
+          }
+        }
         onHoverFaceRef.current(faceId ?? null);
         renderer.domElement.style.cursor = edgeDrag
-          ? hit
+          ? edgeDrag.snapNodeId !== null
             ? "copy"
             : "grabbing"
+          : edgeHit
+            ? "pointer"
           : hit
             ? "crosshair"
             : faceId
               ? "pointer"
               : "grab";
-        if (hit?.index !== undefined) {
+        if (snappedNode) {
+          onHoverRef.current({
+            node: snappedNode,
+            clientX: event.clientX,
+            clientY: event.clientY,
+          });
+        } else if (hit?.index !== undefined) {
           onHoverRef.current({
             node: nodesRef.current[hit.index],
             clientX: event.clientX,
@@ -383,6 +484,15 @@ export default function PointCloudViewport({
       };
 
       const handlePointerDown = (event: PointerEvent) => {
+        if (event.button === 1) {
+          event.preventDefault();
+          return;
+        }
+        if (event.button === 3 && onCycleSmartAxisRef.current) {
+          event.preventDefault();
+          onCycleSmartAxisRef.current();
+          return;
+        }
         if (event.button === 0) {
           pointerStart = { x: event.clientX, y: event.clientY };
         }
@@ -395,9 +505,26 @@ export default function PointCloudViewport({
               hit.object.userData.faceId === editableFaceIdRef.current,
           );
         if (!edgeHit) return;
+        const edge = edgeHit.object as THREE.Line;
+        const start = (edge.userData.start as THREE.Vector3).clone();
+        const end = (edge.userData.end as THREE.Vector3).clone();
+        const preview = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([start, start, end]),
+          new THREE.LineBasicMaterial({
+            color: 0xffbf47,
+            opacity: 1,
+            transparent: true,
+          }),
+        );
+        scene.add(preview);
         edgeDrag = {
           faceId: edgeHit.object.userData.faceId as string,
           edgeIndex: edgeHit.object.userData.edgeIndex as number,
+          start,
+          end,
+          plane: edge.userData.plane as THREE.Plane,
+          preview,
+          snapNodeId: null,
         };
         suppressNextClick = true;
         controls.enabled = false;
@@ -408,14 +535,16 @@ export default function PointCloudViewport({
       const handlePointerUp = (event: PointerEvent) => {
         if (event.button === 0) pointerStart = null;
         if (!edgeDrag || event.button !== 0) return;
-        const nodeHit = getNodeHit(event);
-        if (nodeHit?.index !== undefined) {
+        if (edgeDrag.snapNodeId !== null) {
           onInsertFaceVertexRef.current(
             edgeDrag.faceId,
             edgeDrag.edgeIndex,
-            nodesRef.current[nodeHit.index].id,
+            edgeDrag.snapNodeId,
           );
         }
+        scene.remove(edgeDrag.preview);
+        edgeDrag.preview.geometry.dispose();
+        (edgeDrag.preview.material as THREE.Material).dispose();
         edgeDrag = null;
         controls.enabled = true;
         if (renderer.domElement.hasPointerCapture(event.pointerId)) {
@@ -458,6 +587,10 @@ export default function PointCloudViewport({
         }
       };
 
+      const preventAuxiliaryClick = (event: MouseEvent) => {
+        if (event.button === 1 || event.button === 3) event.preventDefault();
+      };
+
       renderer.domElement.addEventListener("pointermove", handleMove);
       const handleLeave = () => {
         onHoverRef.current(null);
@@ -468,6 +601,7 @@ export default function PointCloudViewport({
       renderer.domElement.addEventListener("pointerup", handlePointerUp);
       renderer.domElement.addEventListener("click", handleClick);
       renderer.domElement.addEventListener("contextmenu", handleContextMenu);
+      renderer.domElement.addEventListener("auxclick", preventAuxiliaryClick);
 
       const resizeObserver = new ResizeObserver(() => {
         const { clientWidth, clientHeight } = host;
@@ -534,6 +668,10 @@ export default function PointCloudViewport({
         renderer.domElement.removeEventListener(
           "contextmenu",
           handleContextMenu,
+        );
+        renderer.domElement.removeEventListener(
+          "auxclick",
+          preventAuxiliaryClick,
         );
         renderer.domElement.removeEventListener(
           "webglcontextlost",
@@ -836,13 +974,37 @@ export default function PointCloudViewport({
               toThree(nextVertex, displayOffset),
             ]),
             new THREE.LineBasicMaterial({
-              color: 0xffbf47,
+              color: 0x02070a,
               opacity: 1,
               transparent: true,
             }),
           );
+          const sourceFace = faces.find(
+            (face) => face.id === polygon.faceId,
+          );
+          const planeDefinition = sourceFace
+            ? basis
+              ? transformPlane(sourceFace.plane, basis)
+              : sourceFace.plane
+            : null;
+          if (planeDefinition) {
+            const normal = new THREE.Vector3(
+              planeDefinition.normal.x,
+              planeDefinition.normal.y,
+              planeDefinition.normal.z,
+            );
+            edge.userData.plane = new THREE.Plane(
+              normal,
+              planeDefinition.constant +
+                normal.x * displayOffset.x +
+                normal.y * displayOffset.y +
+                normal.z * displayOffset.z,
+            );
+          }
           edge.userData.faceId = polygon.faceId;
           edge.userData.edgeIndex = edgeIndex;
+          edge.userData.start = toThree(vertex, displayOffset);
+          edge.userData.end = toThree(nextVertex, displayOffset);
           faceEdgesRef.current.push(edge);
           state.faceGroup.add(edge);
         });

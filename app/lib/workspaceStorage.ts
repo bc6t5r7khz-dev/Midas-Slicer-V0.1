@@ -14,6 +14,8 @@ export type SavedWorkspace = {
   activeTab: WorkflowTab;
   definingFaces: boolean;
   smartSelecting: boolean;
+  smartVariant?: "classic" | "axis" | "local" | "full";
+  smartAxis?: "x" | "y" | "z";
   draftNodeIds: number[];
   selectedFaceIds: string[];
   volumeConfirmed: boolean;

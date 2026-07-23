@@ -329,6 +329,15 @@ button {
   text-align: right;
 }
 
+.smart-method-callout {
+  align-items: flex-start;
+}
+
+.smart-method-callout span {
+  max-width: 185px;
+  text-align: right;
+}
+
 .face-list-section {
   margin: 0 14px;
   border: 1px solid var(--line);
@@ -1024,6 +1033,19 @@ button {
   color: #a4b6bd;
   font-family: Consolas, monospace;
   font-size: 9px;
+}
+
+.hover-label.delete-ready {
+  border-color: #d65762;
+  padding-right: 30px;
+}
+
+.delete-symbol {
+  position: absolute;
+  top: 5px;
+  right: 7px;
+  color: #ff5b68;
+  font: 700 20px/1 Consolas, monospace;
 }
 
 .drop-overlay {
