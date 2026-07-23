@@ -159,6 +159,7 @@ function fitCamera(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
   geometry: THREE.BufferGeometry,
+  localCoordinates: boolean,
 ) {
   geometry.computeBoundingBox();
   const box = geometry.boundingBox;
@@ -169,6 +170,7 @@ function fitCamera(
   const distance = maxDimension / (2 * Math.tan((camera.fov * Math.PI) / 360));
   camera.near = Math.max(distance / 10000, 0.001);
   camera.far = distance * 100;
+  camera.up.set(0, localCoordinates ? 0 : 1, localCoordinates ? 1 : 0);
   camera.position.set(
     center.x + distance * 0.78,
     center.y - distance * 0.7,
@@ -176,7 +178,9 @@ function fitCamera(
   );
   camera.updateProjectionMatrix();
   controls.target.copy(center);
+  camera.lookAt(center);
   controls.update();
+  controls.saveState();
 }
 
 export default function PointCloudViewport({
@@ -464,7 +468,12 @@ export default function PointCloudViewport({
       fittedNodesRef.current !== allNodes ||
       fittedBasisRef.current !== basis
     ) {
-      fitCamera(state.camera, state.controls, state.geometry);
+      fitCamera(
+        state.camera,
+        state.controls,
+        state.geometry,
+        Boolean(basis),
+      );
       fittedNodesRef.current = allNodes;
       fittedBasisRef.current = basis;
     }
