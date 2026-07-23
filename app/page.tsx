@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import AppErrorBoundary from "./components/AppErrorBoundary";
 import ModelViewer from "./components/ModelViewer";
 
 export const metadata: Metadata = {
@@ -8,5 +9,9 @@ export const metadata: Metadata = {
 };
 
 export default function Home() {
-  return <ModelViewer />;
+  return (
+    <AppErrorBoundary>
+      <ModelViewer />
+    </AppErrorBoundary>
+  );
 }

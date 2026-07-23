@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { ModelNode } from "../lib/types";
@@ -100,6 +100,7 @@ export default function PointCloudViewport({
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneState | null>(null);
+  const [renderError, setRenderError] = useState<string | null>(null);
   const nodesRef = useRef(nodes);
   const sliceRef = useRef(slice);
   const onHoverRef = useRef(onHover);
@@ -114,6 +115,7 @@ export default function PointCloudViewport({
     const host = hostRef.current;
     if (!host) return;
 
+    try {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x071018);
     scene.fog = new THREE.FogExp2(0x071018, 0.0014);
@@ -210,10 +212,28 @@ export default function PointCloudViewport({
     resizeObserver.observe(host);
 
     let animationId = 0;
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      cancelAnimationFrame(animationId);
+      setRenderError(
+        "The browser lost access to the graphics processor. Try enabling hardware acceleration or use a current Chrome, Edge, or Firefox browser.",
+      );
+    };
+    renderer.domElement.addEventListener("webglcontextlost", handleContextLost);
+
     const animate = () => {
-      controls.update();
-      renderer.render(scene, camera);
-      animationId = requestAnimationFrame(animate);
+      try {
+        controls.update();
+        renderer.render(scene, camera);
+        animationId = requestAnimationFrame(animate);
+      } catch (error) {
+        cancelAnimationFrame(animationId);
+        setRenderError(
+          error instanceof Error
+            ? `The 3D view stopped: ${error.message}`
+            : "The 3D view stopped because the graphics processor became unavailable.",
+        );
+      }
     };
     animate();
 
@@ -235,6 +255,10 @@ export default function PointCloudViewport({
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("pointermove", handleMove);
       renderer.domElement.removeEventListener("click", handleClick);
+      renderer.domElement.removeEventListener(
+        "webglcontextlost",
+        handleContextLost,
+      );
       geometry.dispose();
       material.dispose();
       renderer.dispose();
@@ -242,6 +266,13 @@ export default function PointCloudViewport({
       renderer.domElement.remove();
       sceneRef.current = null;
     };
+    } catch (error) {
+      setRenderError(
+        error instanceof Error
+          ? `3D rendering could not start: ${error.message}`
+          : "3D rendering could not start in this browser.",
+      );
+    }
   }, []);
 
   useEffect(() => {
@@ -321,5 +352,22 @@ export default function PointCloudViewport({
     material.uniforms.yRange.value.set(slice.y[0], slice.y[1]);
   }, [slice]);
 
-  return <div ref={hostRef} className="viewport-canvas" aria-label="3D node cloud" />;
+  if (renderError) {
+    return (
+      <div className="viewport-canvas render-fallback" role="alert">
+        <div>
+          <strong>3D VIEW UNAVAILABLE</strong>
+          <p>{renderError}</p>
+          <small>
+            The file controls remain safe to use; your MCT data has not been
+            uploaded.
+          </small>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={hostRef} className="viewport-canvas" aria-label="3D node cloud" />
+  );
 }

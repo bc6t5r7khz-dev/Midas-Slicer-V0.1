@@ -44,6 +44,41 @@ button {
   background: var(--background);
 }
 
+.fatal-fallback {
+  min-height: 100svh;
+  display: grid;
+  padding: 28px;
+  place-items: center;
+  background: #071018;
+}
+
+.fatal-fallback > div {
+  width: min(520px, 100%);
+  padding: 30px;
+  border: 1px solid #35515f;
+  background: #0c171f;
+}
+
+.fatal-fallback h1 {
+  margin: 10px 0;
+  font-size: 26px;
+}
+
+.fatal-fallback p {
+  margin: 0 0 20px;
+  color: #c6d6dc;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.fatal-fallback small {
+  display: block;
+  margin-top: 17px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .topbar {
   grid-column: 1 / -1;
   display: grid;
@@ -372,6 +407,39 @@ button {
 .viewport-canvas canvas {
   display: block;
   outline: none;
+}
+
+.render-fallback {
+  display: grid;
+  padding: 40px;
+  place-items: center;
+  background: #071018;
+}
+
+.render-fallback > div {
+  max-width: 430px;
+  padding: 24px;
+  border: 1px solid #3c5967;
+  background: #0c171f;
+}
+
+.render-fallback strong {
+  color: var(--amber);
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+.render-fallback p {
+  margin: 12px 0;
+  color: #c4d3d8;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.render-fallback small {
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .view-hud {
