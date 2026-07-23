@@ -297,7 +297,7 @@ export default function PointCloudViewport({
       controls.panSpeed = 1;
       controls.zoomSpeed = 0.9;
       controls.zoomToCursor = true;
-      controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+      controls.mouseButtons.LEFT = null as unknown as THREE.MOUSE;
       controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
       controls.mouseButtons.RIGHT = null as unknown as THREE.MOUSE;
 
@@ -338,6 +338,11 @@ export default function PointCloudViewport({
         snapNodeId: number | null;
       } | null = null;
       let hoveredEdge: THREE.Line | null = null;
+      let orbitDrag: {
+        pointerId: number;
+        x: number;
+        y: number;
+      } | null = null;
       let suppressNextClick = false;
       let pointerStart: { x: number; y: number } | null = null;
 
@@ -413,6 +418,27 @@ export default function PointCloudViewport({
         return closest;
       };
 
+      const rotateWithSwappedAxes = (deltaX: number, deltaY: number) => {
+        const offset = camera.position.clone().sub(controls.target);
+        const toYUp = new THREE.Quaternion().setFromUnitVectors(
+          camera.up.clone().normalize(),
+          new THREE.Vector3(0, 1, 0),
+        );
+        const fromYUp = toYUp.clone().invert();
+        offset.applyQuaternion(toYUp);
+        const spherical = new THREE.Spherical().setFromVector3(offset);
+        const radiansPerPixel =
+          (Math.PI * 2) /
+          Math.max(renderer.domElement.clientHeight, 1);
+        spherical.theta -= deltaY * radiansPerPixel;
+        spherical.phi -= deltaX * radiansPerPixel;
+        spherical.makeSafe();
+        offset.setFromSpherical(spherical).applyQuaternion(fromYUp);
+        camera.position.copy(controls.target).add(offset);
+        camera.lookAt(controls.target);
+        controls.update();
+      };
+
       const handleMove = (event: PointerEvent) => {
         if (
           pointerStart &&
@@ -422,6 +448,18 @@ export default function PointCloudViewport({
           ) > 4
         ) {
           suppressNextClick = true;
+        }
+        if (orbitDrag && !edgeDrag) {
+          rotateWithSwappedAxes(
+            event.clientX - orbitDrag.x,
+            event.clientY - orbitDrag.y,
+          );
+          orbitDrag.x = event.clientX;
+          orbitDrag.y = event.clientY;
+          renderer.domElement.style.cursor = "grabbing";
+          onHoverRef.current(null);
+          onHoverFaceRef.current(null);
+          return;
         }
         const hit = getNodeHit(event);
         updatePointer(event);
@@ -496,44 +534,61 @@ export default function PointCloudViewport({
         if (event.button === 0) {
           pointerStart = { x: event.clientX, y: event.clientY };
         }
-        if (event.button !== 0 || !editableFaceIdRef.current) return;
+        if (event.button !== 0) return;
         updatePointer(event);
-        const edgeHit = raycaster
-          .intersectObjects(faceEdgesRef.current)
-          .find(
-            (hit) =>
-              hit.object.userData.faceId === editableFaceIdRef.current,
+        const edgeHit = editableFaceIdRef.current
+          ? raycaster
+              .intersectObjects(faceEdgesRef.current)
+              .find(
+                (hit) =>
+                  hit.object.userData.faceId === editableFaceIdRef.current,
+              )
+          : undefined;
+        if (edgeHit) {
+          const edge = edgeHit.object as THREE.Line;
+          const start = (edge.userData.start as THREE.Vector3).clone();
+          const end = (edge.userData.end as THREE.Vector3).clone();
+          const preview = new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints([start, start, end]),
+            new THREE.LineBasicMaterial({
+              color: 0xffbf47,
+              opacity: 1,
+              transparent: true,
+            }),
           );
-        if (!edgeHit) return;
-        const edge = edgeHit.object as THREE.Line;
-        const start = (edge.userData.start as THREE.Vector3).clone();
-        const end = (edge.userData.end as THREE.Vector3).clone();
-        const preview = new THREE.Line(
-          new THREE.BufferGeometry().setFromPoints([start, start, end]),
-          new THREE.LineBasicMaterial({
-            color: 0xffbf47,
-            opacity: 1,
-            transparent: true,
-          }),
-        );
-        scene.add(preview);
-        edgeDrag = {
-          faceId: edgeHit.object.userData.faceId as string,
-          edgeIndex: edgeHit.object.userData.edgeIndex as number,
-          start,
-          end,
-          plane: edge.userData.plane as THREE.Plane,
-          preview,
-          snapNodeId: null,
-        };
-        suppressNextClick = true;
-        controls.enabled = false;
+          scene.add(preview);
+          edgeDrag = {
+            faceId: edgeHit.object.userData.faceId as string,
+            edgeIndex: edgeHit.object.userData.edgeIndex as number,
+            start,
+            end,
+            plane: edge.userData.plane as THREE.Plane,
+            preview,
+            snapNodeId: null,
+          };
+          suppressNextClick = true;
+          controls.enabled = false;
+        } else {
+          orbitDrag = {
+            pointerId: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+          };
+        }
         renderer.domElement.setPointerCapture(event.pointerId);
         event.preventDefault();
       };
 
       const handlePointerUp = (event: PointerEvent) => {
         if (event.button === 0) pointerStart = null;
+        if (orbitDrag && event.button === 0) {
+          orbitDrag = null;
+          if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+            renderer.domElement.releasePointerCapture(event.pointerId);
+          }
+          event.preventDefault();
+          return;
+        }
         if (!edgeDrag || event.button !== 0) return;
         if (edgeDrag.snapNodeId !== null) {
           onInsertFaceVertexRef.current(
@@ -551,6 +606,21 @@ export default function PointCloudViewport({
           renderer.domElement.releasePointerCapture(event.pointerId);
         }
         event.preventDefault();
+      };
+
+      const handlePointerCancel = (event: PointerEvent) => {
+        pointerStart = null;
+        orbitDrag = null;
+        if (edgeDrag) {
+          scene.remove(edgeDrag.preview);
+          edgeDrag.preview.geometry.dispose();
+          (edgeDrag.preview.material as THREE.Material).dispose();
+          edgeDrag = null;
+          controls.enabled = true;
+        }
+        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+          renderer.domElement.releasePointerCapture(event.pointerId);
+        }
       };
 
       const handleContextMenu = (event: MouseEvent) => {
@@ -599,6 +669,10 @@ export default function PointCloudViewport({
       renderer.domElement.addEventListener("pointerleave", handleLeave);
       renderer.domElement.addEventListener("pointerdown", handlePointerDown);
       renderer.domElement.addEventListener("pointerup", handlePointerUp);
+      renderer.domElement.addEventListener(
+        "pointercancel",
+        handlePointerCancel,
+      );
       renderer.domElement.addEventListener("click", handleClick);
       renderer.domElement.addEventListener("contextmenu", handleContextMenu);
       renderer.domElement.addEventListener("auxclick", preventAuxiliaryClick);
@@ -664,6 +738,10 @@ export default function PointCloudViewport({
           handlePointerDown,
         );
         renderer.domElement.removeEventListener("pointerup", handlePointerUp);
+        renderer.domElement.removeEventListener(
+          "pointercancel",
+          handlePointerCancel,
+        );
         renderer.domElement.removeEventListener("click", handleClick);
         renderer.domElement.removeEventListener(
           "contextmenu",

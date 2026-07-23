@@ -1348,7 +1348,7 @@ export default function ModelViewer() {
             }`}
           />
           <strong>{instruction}</strong>
-          <span>Left drag rotate · Middle drag pan · Scroll zoom</span>
+          <span>Left drag: horizontal ↕ · vertical ↔ · Middle pan · Scroll zoom</span>
         </div>
 
         <div className="axis-badge" aria-label="Local axis legend">
