@@ -148,6 +148,78 @@ export function coplanarConvexHull(points: Vec3[], normal: Vec3): Vec3[] {
   );
 }
 
+function polygonNormal(points: Vec3[]): Vec3 {
+  const sum = { x: 0, y: 0, z: 0 };
+  for (
+    let current = 0, previous = points.length - 1;
+    current < points.length;
+    previous = current, current += 1
+  ) {
+    const a = points[previous];
+    const b = points[current];
+    sum.x += (a.y - b.y) * (a.z + b.z);
+    sum.y += (a.z - b.z) * (a.x + b.x);
+    sum.z += (a.x - b.x) * (a.y + b.y);
+  }
+  return normalize(sum);
+}
+
+function segmentsIntersect2D(
+  a: Pick<ProjectedPoint, "x" | "y">,
+  b: Pick<ProjectedPoint, "x" | "y">,
+  c: Pick<ProjectedPoint, "x" | "y">,
+  d: Pick<ProjectedPoint, "x" | "y">,
+): boolean {
+  const abC = cross2D(a, b, c);
+  const abD = cross2D(a, b, d);
+  const cdA = cross2D(c, d, a);
+  const cdB = cross2D(c, d, b);
+  return (
+    ((abC > EPSILON && abD < -EPSILON) ||
+      (abC < -EPSILON && abD > EPSILON)) &&
+    ((cdA > EPSILON && cdB < -EPSILON) ||
+      (cdA < -EPSILON && cdB > EPSILON))
+  );
+}
+
+function validateOrderedBoundary(
+  points: Vec3[],
+  normal: Vec3,
+): void {
+  const [u, v] = basisOnPlane(normal);
+  const polygon = points.map((point) => ({
+    point,
+    x: dot(point, u),
+    y: dot(point, v),
+  }));
+
+  for (let first = 0; first < polygon.length; first += 1) {
+    const firstNext = (first + 1) % polygon.length;
+    for (let second = first + 1; second < polygon.length; second += 1) {
+      const secondNext = (second + 1) % polygon.length;
+      if (
+        first === second ||
+        firstNext === second ||
+        secondNext === first
+      ) {
+        continue;
+      }
+      if (
+        segmentsIntersect2D(
+          polygon[first],
+          polygon[firstNext],
+          polygon[second],
+          polygon[secondNext],
+        )
+      ) {
+        throw new Error(
+          "The boundary lines cross. Use Backspace and trace the perimeter in order.",
+        );
+      }
+    }
+  }
+}
+
 export function createFace(
   id: string,
   label: string,
@@ -159,19 +231,16 @@ export function createFace(
     throw new Error("A face needs at least three nodes.");
   }
 
-  let normal = normalize(
-    cross(
-      subtract(nodes[1].point, nodes[0].point),
-      subtract(nodes[2].point, nodes[0].point),
-    ),
-  );
+  const orderedPoints = nodes.map((node) => node.point);
+  let normal = polygonNormal(orderedPoints);
   let constant = -dot(normal, nodes[0].point);
 
-  for (const node of nodes.slice(3)) {
+  for (const node of nodes.slice(1)) {
     if (Math.abs(dot(normal, node.point) + constant) > tolerance) {
       throw new Error("The selected nodes are not coplanar.");
     }
   }
+  validateOrderedBoundary(orderedPoints, normal);
 
   // Orient the plane so the model centroid lies on the inside side.
   if (dot(normal, cloudCenter) + constant > 0) {
@@ -183,10 +252,7 @@ export function createFace(
     id,
     label,
     nodeIds: nodes.map((node) => node.id),
-    vertices: coplanarConvexHull(
-      nodes.map((node) => node.point),
-      normal,
-    ),
+    vertices: orderedPoints,
     plane: { normal, constant },
   };
 }

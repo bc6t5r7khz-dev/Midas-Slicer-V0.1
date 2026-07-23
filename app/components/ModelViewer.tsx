@@ -364,7 +364,13 @@ export default function ModelViewer() {
 
     if (activeTab === "volume" && definingFaces) {
       setDraftNodeIds((current) => {
-        if (current.includes(nodeId)) return current.filter((id) => id !== nodeId);
+        if (current.includes(nodeId)) {
+          setError(
+            "That point is already on this boundary. Use Backspace to step backward.",
+          );
+          return current;
+        }
+        setError(null);
         return [...current, nodeId];
       });
       return;
@@ -523,7 +529,7 @@ export default function ModelViewer() {
   const instruction =
     activeTab === "volume"
       ? definingFaces
-        ? `${draftNodeIds.length} nodes · Space creates face`
+        ? `${draftNodeIds.length} boundary points · Space closes face`
         : smartSelecting
           ? smartPreviewFace
             ? "Click to add the highlighted face"
@@ -628,9 +634,9 @@ export default function ModelViewer() {
               <span className="eyebrow">CONVEX BOUNDARY</span>
               <h1>Define the inspection volume</h1>
               <p>
-                Pick 3 or more coplanar nodes and press Space, or hover and
-                click with Smart Select. Only nodes inside the face boundary
-                peel away.
+                Click a start node, then trace the perimeter in order. Press
+                Space to close the last line back to the start. Smart Select
+                remains available for automatic planar patches.
               </p>
             </section>
 
@@ -642,6 +648,11 @@ export default function ModelViewer() {
                   setSmartSelecting(false);
                   setDraftNodeIds([]);
                   setVolumeConfirmed(false);
+                  setStatus(
+                    definingFaces
+                      ? "Manual boundary ended."
+                      : "Pick the first boundary point, then trace each side.",
+                  );
                 }}
               >
                 {definingFaces ? "Defining…" : "Begin"}
@@ -675,8 +686,8 @@ export default function ModelViewer() {
                 <strong>{draftNodeIds.length} selected</strong>
                 <span>
                   {draftNodeIds.length >= 3
-                    ? "Press Space to create this face"
-                    : `Pick ${3 - draftNodeIds.length} more node${
+                    ? "Press Space to close and create the face"
+                    : `Trace ${3 - draftNodeIds.length} more point${
                         3 - draftNodeIds.length === 1 ? "" : "s"
                       }`}
                 </span>

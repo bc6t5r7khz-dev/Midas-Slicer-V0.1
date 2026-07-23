@@ -14,11 +14,7 @@ import type {
 import {
   buildPolyhedron,
   clipPolygonToPlanes,
-  coplanarConvexHull,
-  cross,
-  normalize,
   slicePlanes,
-  subtract,
 } from "../lib/volumeGeometry";
 
 type PickTarget = "node" | "face";
@@ -99,8 +95,37 @@ const toThree = (point: Vec3, offset: Vec3) =>
 
 function triangulatePolygon(vertices: Vec3[], offset: Vec3) {
   const positions: number[] = [];
-  for (let index = 1; index < vertices.length - 1; index += 1) {
-    for (const vertex of [vertices[0], vertices[index], vertices[index + 1]]) {
+  const normal = new THREE.Vector3();
+  for (
+    let current = 0, previous = vertices.length - 1;
+    current < vertices.length;
+    previous = current, current += 1
+  ) {
+    const a = vertices[previous];
+    const b = vertices[current];
+    normal.x += (a.y - b.y) * (a.z + b.z);
+    normal.y += (a.z - b.z) * (a.x + b.x);
+    normal.z += (a.x - b.x) * (a.y + b.y);
+  }
+  normal.normalize();
+  const helper =
+    Math.abs(normal.z) < 0.8
+      ? new THREE.Vector3(0, 0, 1)
+      : new THREE.Vector3(0, 1, 0);
+  const u = new THREE.Vector3().crossVectors(helper, normal).normalize();
+  const v = new THREE.Vector3().crossVectors(normal, u).normalize();
+  const contour = vertices.map(
+    (vertex) =>
+      new THREE.Vector2(
+        vertex.x * u.x + vertex.y * u.y + vertex.z * u.z,
+        vertex.x * v.x + vertex.y * v.y + vertex.z * v.z,
+      ),
+  );
+  const triangles = THREE.ShapeUtils.triangulateShape(contour, []);
+
+  for (const triangle of triangles) {
+    for (const index of triangle) {
+      const vertex = vertices[index];
       positions.push(
         vertex.x - offset.x,
         vertex.y - offset.y,
@@ -549,25 +574,29 @@ export default function PointCloudViewport({
     }
 
     const nodeMap = new Map(allNodes.map((node) => [node.id, node]));
-    if (draftNodeIds.length >= 3) {
-      const draft = draftNodeIds
-        .map((id) => nodeMap.get(id))
-        .filter((node): node is ModelNode => Boolean(node))
-        .map((node) => node.local ?? node.global);
-      if (draft.length >= 3) {
-        try {
-          const normal = normalize(
-            cross(subtract(draft[1], draft[0]), subtract(draft[2], draft[0])),
-          );
-          polygons.push({
-            vertices: coplanarConvexHull(draft, normal),
-            selected: true,
-            isSlice: false,
-          });
-        } catch {
-          // Two coincident draft points do not form a preview yet.
-        }
-      }
+    const draft = draftNodeIds
+      .map((id) => nodeMap.get(id))
+      .filter((node): node is ModelNode => Boolean(node))
+      .map((node) => node.local ?? node.global);
+    if (draft.length >= 2) {
+      const draftLine = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(
+          draft.map((point) => toThree(point, displayOffset)),
+        ),
+        new THREE.LineBasicMaterial({
+          color: 0xffbf47,
+          opacity: 1,
+          transparent: true,
+        }),
+      );
+      state.faceGroup.add(draftLine);
+    }
+    if (draft.length >= 3) {
+      polygons.push({
+        vertices: draft,
+        selected: true,
+        isSlice: false,
+      });
     }
 
     for (const polygon of polygons) {
