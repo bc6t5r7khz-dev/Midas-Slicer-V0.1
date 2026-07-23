@@ -1,28 +1,52 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { ModelNode } from "../lib/types";
+import { toLocal, transformPlane } from "../lib/coordinateSystem";
+import type {
+  LocalBasis,
+  ModelNode,
+  SliceRanges,
+  Vec3,
+  VolumeFace,
+} from "../lib/types";
+import {
+  buildPolyhedron,
+  cross,
+  normalize,
+  slicePlanes,
+  sortCoplanarPoints,
+  subtract,
+} from "../lib/volumeGeometry";
 
-type SliceRange = { x: [number, number]; y: [number, number] };
+type PickTarget = "node" | "face";
 
 type Props = {
   nodes: ModelNode[];
-  slice: SliceRange;
-  basisReady: boolean;
-  selections: Array<number | null>;
+  allNodes: ModelNode[];
+  slice: SliceRanges;
+  basis: LocalBasis | null;
+  faces: VolumeFace[];
+  draftNodeIds: number[];
+  selectedNodeIds: number[];
+  selectedFaceIds: string[];
+  volumeConfirmed: boolean;
+  pickTarget: PickTarget;
+  tolerance: number;
   onHover: (payload: {
     node: ModelNode;
     clientX: number;
     clientY: number;
   } | null) => void;
-  onPick: (index: number) => void;
+  onPickNode: (nodeId: number) => void;
+  onPickFace: (faceId: string) => void;
 };
 
 type SceneState = {
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
+  faceGroup: THREE.Group;
   geometry: THREE.BufferGeometry;
   material: THREE.ShaderMaterial;
   points: THREE.Points;
@@ -30,20 +54,17 @@ type SceneState = {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   resizeObserver: ResizeObserver;
-  animationId: number;
 };
 
 const vertexShader = `
   attribute vec3 nodeColor;
-  attribute vec2 sliceCoord;
+  attribute vec3 sliceCoord;
   varying vec3 vColor;
-  varying float vLocalX;
-  varying float vLocalY;
+  varying vec3 vSliceCoord;
 
   void main() {
     vColor = nodeColor;
-    vLocalX = sliceCoord.x;
-    vLocalY = sliceCoord.y;
+    vSliceCoord = sliceCoord;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     gl_PointSize = clamp(72.0 / -mvPosition.z, 2.3, 7.0);
     gl_Position = projectionMatrix * mvPosition;
@@ -53,18 +74,59 @@ const vertexShader = `
 const fragmentShader = `
   uniform vec2 xRange;
   uniform vec2 yRange;
+  uniform vec2 zRange;
   varying vec3 vColor;
-  varying float vLocalX;
-  varying float vLocalY;
+  varying vec3 vSliceCoord;
 
   void main() {
-    if (vLocalX < xRange.x || vLocalX > xRange.y ||
-        vLocalY < yRange.x || vLocalY > yRange.y) discard;
+    if (vSliceCoord.x < xRange.x || vSliceCoord.x > xRange.y ||
+        vSliceCoord.y < yRange.x || vSliceCoord.y > yRange.y ||
+        vSliceCoord.z < zRange.x || vSliceCoord.z > zRange.y) discard;
     vec2 point = gl_PointCoord - vec2(0.5);
     if (dot(point, point) > 0.25) discard;
     gl_FragColor = vec4(vColor, 1.0);
   }
 `;
+
+const toThree = (point: Vec3, offset: Vec3) =>
+  new THREE.Vector3(
+    point.x - offset.x,
+    point.y - offset.y,
+    point.z - offset.z,
+  );
+
+function triangulatePolygon(vertices: Vec3[], offset: Vec3) {
+  const positions: number[] = [];
+  for (let index = 1; index < vertices.length - 1; index += 1) {
+    for (const vertex of [vertices[0], vertices[index], vertices[index + 1]]) {
+      positions.push(
+        vertex.x - offset.x,
+        vertex.y - offset.y,
+        vertex.z - offset.z,
+      );
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function disposeGroup(group: THREE.Group) {
+  for (const child of [...group.children]) {
+    group.remove(child);
+    if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+      child.geometry.dispose();
+      const materials = Array.isArray(child.material)
+        ? child.material
+        : [child.material];
+      materials.forEach((material) => material.dispose());
+    }
+  }
+}
 
 function fitCamera(
   camera: THREE.PerspectiveCamera,
@@ -92,77 +154,114 @@ function fitCamera(
 
 export default function PointCloudViewport({
   nodes,
+  allNodes,
   slice,
-  basisReady,
-  selections,
+  basis,
+  faces,
+  draftNodeIds,
+  selectedNodeIds,
+  selectedFaceIds,
+  volumeConfirmed,
+  pickTarget,
+  tolerance,
   onHover,
-  onPick,
+  onPickNode,
+  onPickFace,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneState | null>(null);
-  const [renderError, setRenderError] = useState<string | null>(null);
+  const faceMeshesRef = useRef<THREE.Mesh[]>([]);
+  const fittedNodesRef = useRef<ModelNode[] | null>(null);
+  const fittedBasisRef = useRef<LocalBasis | null>(null);
   const nodesRef = useRef(nodes);
   const sliceRef = useRef(slice);
+  const pickTargetRef = useRef(pickTarget);
   const onHoverRef = useRef(onHover);
-  const onPickRef = useRef(onPick);
+  const onPickNodeRef = useRef(onPickNode);
+  const onPickFaceRef = useRef(onPickFace);
+  const [renderError, setRenderError] = useState<string | null>(null);
 
   nodesRef.current = nodes;
   sliceRef.current = slice;
+  pickTargetRef.current = pickTarget;
   onHoverRef.current = onHover;
-  onPickRef.current = onPick;
+  onPickNodeRef.current = onPickNode;
+  onPickFaceRef.current = onPickFace;
+
+  const displayOffset = useMemo(() => {
+    if (basis || !allNodes.length) return { x: 0, y: 0, z: 0 };
+    const sum = allNodes.reduce(
+      (current, node) => ({
+        x: current.x + node.global.x,
+        y: current.y + node.global.y,
+        z: current.z + node.global.z,
+      }),
+      { x: 0, y: 0, z: 0 },
+    );
+    return {
+      x: sum.x / allNodes.length,
+      y: sum.y / allNodes.length,
+      z: sum.z / allNodes.length,
+    };
+  }, [allNodes, basis]);
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
 
     try {
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x071018);
-    scene.fog = new THREE.FogExp2(0x071018, 0.0014);
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x071018);
+      scene.fog = new THREE.FogExp2(0x071018, 0.0014);
 
-    const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 1000000);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    host.appendChild(renderer.domElement);
+      const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 1000000);
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      host.appendChild(renderer.domElement);
 
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.screenSpacePanning = true;
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      controls.screenSpacePanning = true;
 
-    const grid = new THREE.GridHelper(240, 24, 0x254255, 0x142835);
-    grid.rotation.x = Math.PI / 2;
-    grid.material.opacity = 0.32;
-    grid.material.transparent = true;
-    scene.add(grid);
+      const grid = new THREE.GridHelper(240, 24, 0x254255, 0x142835);
+      grid.rotation.x = Math.PI / 2;
+      grid.material.opacity = 0.28;
+      grid.material.transparent = true;
+      scene.add(grid);
 
-    const geometry = new THREE.BufferGeometry();
-    const material = new THREE.ShaderMaterial({
-      vertexShader,
-      fragmentShader,
-      transparent: false,
-      uniforms: {
-        xRange: { value: new THREE.Vector2(-1e20, 1e20) },
-        yRange: { value: new THREE.Vector2(-1e20, 1e20) },
-      },
-      vertexColors: true,
-    });
-    const points = new THREE.Points(geometry, material);
-    scene.add(points);
+      const faceGroup = new THREE.Group();
+      scene.add(faceGroup);
 
-    const raycaster = new THREE.Raycaster();
-    raycaster.params.Points = { threshold: 1.2 };
-    const pointer = new THREE.Vector2();
+      const geometry = new THREE.BufferGeometry();
+      const material = new THREE.ShaderMaterial({
+        vertexShader,
+        fragmentShader,
+        uniforms: {
+          xRange: { value: new THREE.Vector2(-1e20, 1e20) },
+          yRange: { value: new THREE.Vector2(-1e20, 1e20) },
+          zRange: { value: new THREE.Vector2(-1e20, 1e20) },
+        },
+        vertexColors: true,
+      });
+      const points = new THREE.Points(geometry, material);
+      scene.add(points);
 
-    const getHit = (event: PointerEvent) => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(pointer, camera);
-      return raycaster
-        .intersectObject(points)
-        .find((hit) => {
+      const raycaster = new THREE.Raycaster();
+      raycaster.params.Points = { threshold: 1.2 };
+      const pointer = new THREE.Vector2();
+
+      const updatePointer = (event: PointerEvent) => {
+        const rect = renderer.domElement.getBoundingClientRect();
+        pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        raycaster.setFromCamera(pointer, camera);
+      };
+
+      const getNodeHit = (event: PointerEvent) => {
+        updatePointer(event);
+        return raycaster.intersectObject(points).find((hit) => {
           const node = nodesRef.current[hit.index ?? -1];
           if (!node) return false;
           const value = node.local ?? node.global;
@@ -171,101 +270,118 @@ export default function PointCloudViewport({
             value.x >= range.x[0] &&
             value.x <= range.x[1] &&
             value.y >= range.y[0] &&
-            value.y <= range.y[1]
+            value.y <= range.y[1] &&
+            value.z >= range.z[0] &&
+            value.z <= range.z[1]
           );
         });
-    };
+      };
 
-    const handleMove = (event: PointerEvent) => {
-      const hit = getHit(event);
-      renderer.domElement.style.cursor = hit ? "crosshair" : "grab";
-      if (hit?.index !== undefined) {
-        onHoverRef.current({
-          node: nodesRef.current[hit.index],
-          clientX: event.clientX,
-          clientY: event.clientY,
-        });
-      } else {
-        onHoverRef.current(null);
-      }
-    };
+      const handleMove = (event: PointerEvent) => {
+        const hit = getNodeHit(event);
+        renderer.domElement.style.cursor = hit ? "crosshair" : "grab";
+        if (hit?.index !== undefined) {
+          onHoverRef.current({
+            node: nodesRef.current[hit.index],
+            clientX: event.clientX,
+            clientY: event.clientY,
+          });
+        } else {
+          onHoverRef.current(null);
+        }
+      };
 
-    const handleClick = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      const hit = getHit(event);
-      if (hit?.index !== undefined) onPickRef.current(hit.index);
-    };
+      const handleClick = (event: PointerEvent) => {
+        if (event.button !== 0) return;
+        updatePointer(event);
 
-    renderer.domElement.addEventListener("pointermove", handleMove);
-    renderer.domElement.addEventListener("pointerleave", () =>
-      onHoverRef.current(null),
-    );
-    renderer.domElement.addEventListener("click", handleClick);
+        if (pickTargetRef.current === "face") {
+          const faceHit = raycaster.intersectObjects(faceMeshesRef.current)[0];
+          const faceId = faceHit?.object.userData.faceId as string | undefined;
+          if (faceId) onPickFaceRef.current(faceId);
+          return;
+        }
 
-    const resizeObserver = new ResizeObserver(() => {
-      const { clientWidth, clientHeight } = host;
-      if (!clientWidth || !clientHeight) return;
-      renderer.setSize(clientWidth, clientHeight, false);
-      camera.aspect = clientWidth / clientHeight;
-      camera.updateProjectionMatrix();
-    });
-    resizeObserver.observe(host);
+        const nodeHit = getNodeHit(event);
+        if (nodeHit?.index !== undefined) {
+          onPickNodeRef.current(nodesRef.current[nodeHit.index].id);
+        }
+      };
 
-    let animationId = 0;
-    const handleContextLost = (event: Event) => {
-      event.preventDefault();
-      cancelAnimationFrame(animationId);
-      setRenderError(
-        "The browser lost access to the graphics processor. Try enabling hardware acceleration or use a current Chrome, Edge, or Firefox browser.",
+      renderer.domElement.addEventListener("pointermove", handleMove);
+      renderer.domElement.addEventListener("pointerleave", () =>
+        onHoverRef.current(null),
       );
-    };
-    renderer.domElement.addEventListener("webglcontextlost", handleContextLost);
+      renderer.domElement.addEventListener("click", handleClick);
 
-    const animate = () => {
-      try {
-        controls.update();
-        renderer.render(scene, camera);
-        animationId = requestAnimationFrame(animate);
-      } catch (error) {
+      const resizeObserver = new ResizeObserver(() => {
+        const { clientWidth, clientHeight } = host;
+        if (!clientWidth || !clientHeight) return;
+        renderer.setSize(clientWidth, clientHeight, false);
+        camera.aspect = clientWidth / clientHeight;
+        camera.updateProjectionMatrix();
+      });
+      resizeObserver.observe(host);
+
+      let animationId = 0;
+      const handleContextLost = (event: Event) => {
+        event.preventDefault();
         cancelAnimationFrame(animationId);
         setRenderError(
-          error instanceof Error
-            ? `The 3D view stopped: ${error.message}`
-            : "The 3D view stopped because the graphics processor became unavailable.",
+          "The browser lost access to the graphics processor. Enable WebGL or hardware acceleration and reload.",
         );
-      }
-    };
-    animate();
-
-    sceneRef.current = {
-      camera,
-      controls,
-      geometry,
-      material,
-      points,
-      raycaster,
-      renderer,
-      scene,
-      resizeObserver,
-      animationId,
-    };
-
-    return () => {
-      cancelAnimationFrame(animationId);
-      resizeObserver.disconnect();
-      renderer.domElement.removeEventListener("pointermove", handleMove);
-      renderer.domElement.removeEventListener("click", handleClick);
-      renderer.domElement.removeEventListener(
+      };
+      renderer.domElement.addEventListener(
         "webglcontextlost",
         handleContextLost,
       );
-      geometry.dispose();
-      material.dispose();
-      renderer.dispose();
-      controls.dispose();
-      renderer.domElement.remove();
-      sceneRef.current = null;
-    };
+
+      const animate = () => {
+        try {
+          controls.update();
+          renderer.render(scene, camera);
+          animationId = requestAnimationFrame(animate);
+        } catch (error) {
+          cancelAnimationFrame(animationId);
+          setRenderError(
+            error instanceof Error
+              ? `The 3D view stopped: ${error.message}`
+              : "The graphics processor became unavailable.",
+          );
+        }
+      };
+      animate();
+
+      sceneRef.current = {
+        camera,
+        controls,
+        faceGroup,
+        geometry,
+        material,
+        points,
+        raycaster,
+        renderer,
+        scene,
+        resizeObserver,
+      };
+
+      return () => {
+        cancelAnimationFrame(animationId);
+        resizeObserver.disconnect();
+        renderer.domElement.removeEventListener("pointermove", handleMove);
+        renderer.domElement.removeEventListener("click", handleClick);
+        renderer.domElement.removeEventListener(
+          "webglcontextlost",
+          handleContextLost,
+        );
+        disposeGroup(faceGroup);
+        geometry.dispose();
+        material.dispose();
+        renderer.dispose();
+        controls.dispose();
+        renderer.domElement.remove();
+        sceneRef.current = null;
+      };
     } catch (error) {
       setRenderError(
         error instanceof Error
@@ -277,36 +393,23 @@ export default function PointCloudViewport({
 
   useEffect(() => {
     const state = sceneRef.current;
-    if (!state || nodes.length === 0) return;
+    if (!state || !nodes.length) return;
 
     const positions = new Float32Array(nodes.length * 3);
     const colors = new Float32Array(nodes.length * 3);
-    const sliceCoordinates = new Float32Array(nodes.length * 2);
+    const coordinates = new Float32Array(nodes.length * 3);
     const base = new THREE.Color(0x72e6ff);
     const selected = new THREE.Color(0xffbf47);
 
-    let center = { x: 0, y: 0, z: 0 };
-    if (!basisReady) {
-      for (const node of nodes) {
-        center.x += node.global.x;
-        center.y += node.global.y;
-        center.z += node.global.z;
-      }
-      center = {
-        x: center.x / nodes.length,
-        y: center.y / nodes.length,
-        z: center.z / nodes.length,
-      };
-    }
-
     nodes.forEach((node, index) => {
       const value = node.local ?? node.global;
-      positions[index * 3] = value.x - center.x;
-      positions[index * 3 + 1] = value.y - center.y;
-      positions[index * 3 + 2] = value.z - center.z;
-      sliceCoordinates[index * 2] = value.x;
-      sliceCoordinates[index * 2 + 1] = value.y;
-      const color = selections.includes(index) ? selected : base;
+      positions[index * 3] = value.x - displayOffset.x;
+      positions[index * 3 + 1] = value.y - displayOffset.y;
+      positions[index * 3 + 2] = value.z - displayOffset.z;
+      coordinates[index * 3] = value.x;
+      coordinates[index * 3 + 1] = value.y;
+      coordinates[index * 3 + 2] = value.z;
+      const color = selectedNodeIds.includes(node.id) ? selected : base;
       colors[index * 3] = color.r;
       colors[index * 3 + 1] = color.g;
       colors[index * 3 + 2] = color.b;
@@ -322,15 +425,29 @@ export default function PointCloudViewport({
     );
     state.geometry.setAttribute(
       "sliceCoord",
-      new THREE.BufferAttribute(sliceCoordinates, 2),
+      new THREE.BufferAttribute(coordinates, 3),
     );
     state.geometry.computeBoundingSphere();
     state.raycaster.params.Points.threshold = Math.max(
       (state.geometry.boundingSphere?.radius ?? 1) / 125,
       0.15,
     );
-    fitCamera(state.camera, state.controls, state.geometry);
-  }, [nodes, basisReady]);
+    if (
+      fittedNodesRef.current !== allNodes ||
+      fittedBasisRef.current !== basis
+    ) {
+      fitCamera(state.camera, state.controls, state.geometry);
+      fittedNodesRef.current = allNodes;
+      fittedBasisRef.current = basis;
+    }
+  }, [
+    allNodes,
+    basis,
+    nodes,
+    displayOffset.x,
+    displayOffset.y,
+    displayOffset.z,
+  ]);
 
   useEffect(() => {
     const state = sceneRef.current;
@@ -338,19 +455,136 @@ export default function PointCloudViewport({
     if (!state || !colorAttribute || colorAttribute.count !== nodes.length) return;
     const base = new THREE.Color(0x72e6ff);
     const selected = new THREE.Color(0xffbf47);
-    nodes.forEach((_, index) => {
-      const color = selections.includes(index) ? selected : base;
+    nodes.forEach((node, index) => {
+      const color = selectedNodeIds.includes(node.id) ? selected : base;
       colorAttribute.setXYZ(index, color.r, color.g, color.b);
     });
     colorAttribute.needsUpdate = true;
-  }, [nodes, selections]);
+  }, [nodes, selectedNodeIds]);
 
   useEffect(() => {
-    const material = sceneRef.current?.material;
-    if (!material) return;
-    material.uniforms.xRange.value.set(slice.x[0], slice.x[1]);
-    material.uniforms.yRange.value.set(slice.y[0], slice.y[1]);
+    const state = sceneRef.current;
+    if (!state) return;
+    state.material.uniforms.xRange.value.set(slice.x[0], slice.x[1]);
+    state.material.uniforms.yRange.value.set(slice.y[0], slice.y[1]);
+    state.material.uniforms.zRange.value.set(slice.z[0], slice.z[1]);
   }, [slice]);
+
+  useEffect(() => {
+    const state = sceneRef.current;
+    if (!state) return;
+    disposeGroup(state.faceGroup);
+    faceMeshesRef.current = [];
+
+    const toDisplay = (point: Vec3) => (basis ? toLocal(point, basis) : point);
+    const displayPlanes = faces.map((face) =>
+      basis ? transformPlane(face.plane, basis) : face.plane,
+    );
+    const polygons: Array<{
+      vertices: Vec3[];
+      faceId?: string;
+      selected: boolean;
+      isSlice: boolean;
+    }> = [];
+
+    if (volumeConfirmed && displayPlanes.length >= 4) {
+      const clipped = buildPolyhedron(
+        [...displayPlanes, ...slicePlanes(slice)],
+        tolerance,
+        false,
+      );
+      if (clipped) {
+        for (const polygon of clipped.faces) {
+          const face = faces[polygon.planeIndex];
+          polygons.push({
+            vertices: polygon.vertices,
+            faceId: face?.id,
+            selected: face ? selectedFaceIds.includes(face.id) : false,
+            isSlice: polygon.planeIndex >= faces.length,
+          });
+        }
+      }
+    } else {
+      for (const face of faces) {
+        polygons.push({
+          vertices: face.vertices.map(toDisplay),
+          faceId: face.id,
+          selected: selectedFaceIds.includes(face.id),
+          isSlice: false,
+        });
+      }
+    }
+
+    const nodeMap = new Map(allNodes.map((node) => [node.id, node]));
+    if (draftNodeIds.length >= 3) {
+      const draft = draftNodeIds
+        .map((id) => nodeMap.get(id))
+        .filter((node): node is ModelNode => Boolean(node))
+        .map((node) => node.local ?? node.global);
+      if (draft.length >= 3) {
+        try {
+          const normal = normalize(
+            cross(subtract(draft[1], draft[0]), subtract(draft[2], draft[0])),
+          );
+          polygons.push({
+            vertices: sortCoplanarPoints(draft, normal),
+            selected: true,
+            isSlice: false,
+          });
+        } catch {
+          // Two coincident draft points do not form a preview yet.
+        }
+      }
+    }
+
+    for (const polygon of polygons) {
+      if (polygon.vertices.length < 3) continue;
+      const geometry = triangulatePolygon(polygon.vertices, displayOffset);
+      const material = new THREE.MeshBasicMaterial({
+        color: polygon.selected
+          ? 0xffbf47
+          : polygon.isSlice
+            ? 0xa9c3cc
+            : 0x91afba,
+        opacity: volumeConfirmed ? 0.19 : 0.25,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      if (polygon.faceId) {
+        mesh.userData.faceId = polygon.faceId;
+        faceMeshesRef.current.push(mesh);
+      }
+      state.faceGroup.add(mesh);
+
+      const outlineGeometry = new THREE.BufferGeometry().setFromPoints([
+        ...polygon.vertices.map((vertex) => toThree(vertex, displayOffset)),
+        toThree(polygon.vertices[0], displayOffset),
+      ]);
+      const outline = new THREE.Line(
+        outlineGeometry,
+        new THREE.LineBasicMaterial({
+          color: 0x02070a,
+          opacity: 0.95,
+          transparent: true,
+        }),
+      );
+      state.faceGroup.add(outline);
+    }
+  }, [
+    allNodes,
+    basis,
+    displayOffset.x,
+    displayOffset.y,
+    displayOffset.z,
+    draftNodeIds,
+    faces,
+    selectedFaceIds,
+    slice,
+    tolerance,
+    volumeConfirmed,
+  ]);
 
   if (renderError) {
     return (
@@ -359,8 +593,7 @@ export default function PointCloudViewport({
           <strong>3D VIEW UNAVAILABLE</strong>
           <p>{renderError}</p>
           <small>
-            The file controls remain safe to use; your MCT data has not been
-            uploaded.
+            Your MCT data remains local and has not been uploaded.
           </small>
         </div>
       </div>

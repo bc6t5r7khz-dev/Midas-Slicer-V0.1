@@ -1,7 +1,7 @@
 "use client";
 
 type Props = {
-  axis: "X" | "Y";
+  axis: "X" | "Y" | "Z";
   bounds: [number, number];
   value: [number, number];
   onChange: (value: [number, number]) => void;

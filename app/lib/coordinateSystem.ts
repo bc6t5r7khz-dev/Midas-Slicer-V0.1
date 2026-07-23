@@ -1,42 +1,31 @@
-import type { Bounds, LocalBasis, ModelNode, Vec3 } from "./types";
+import type {
+  Bounds,
+  LocalBasis,
+  ModelNode,
+  PlaneDefinition,
+  Vec3,
+} from "./types";
+import { cross, dot, normalize, subtract } from "./volumeGeometry";
 
-const EPSILON = 1e-10;
-
-const subtract = (a: Vec3, b: Vec3): Vec3 => ({
-  x: a.x - b.x,
-  y: a.y - b.y,
-  z: a.z - b.z,
-});
-
-const dot = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z;
-
-const cross = (a: Vec3, b: Vec3): Vec3 => ({
-  x: a.y * b.z - a.z * b.y,
-  y: a.z * b.x - a.x * b.z,
-  z: a.x * b.y - a.y * b.x,
-});
-
-const normalize = (v: Vec3): Vec3 => {
-  const length = Math.sqrt(dot(v, v));
-  if (length < EPSILON) throw new Error("Selected nodes are too close together.");
-  return { x: v.x / length, y: v.y / length, z: v.z / length };
-};
-
-export function createLocalBasis(
+export function createBasisFromFloor(
   origin: Vec3,
   axisPoint: Vec3,
-  planePoint: Vec3,
+  floorPlane: PlaneDefinition,
 ): LocalBasis {
-  const xAxis = normalize(subtract(axisPoint, origin));
-  const planeVector = subtract(planePoint, origin);
-  const projection = dot(planeVector, xAxis);
-  const transverse = {
-    x: planeVector.x - projection * xAxis.x,
-    y: planeVector.y - projection * xAxis.y,
-    z: planeVector.z - projection * xAxis.z,
-  };
-  const yAxis = normalize(transverse);
-  const zAxis = normalize(cross(xAxis, yAxis));
+  // Face normals point out of the volume; the floor's inward direction is +Z.
+  const zAxis = normalize({
+    x: -floorPlane.normal.x,
+    y: -floorPlane.normal.y,
+    z: -floorPlane.normal.z,
+  });
+  const rawX = subtract(axisPoint, origin);
+  const zProjection = dot(rawX, zAxis);
+  const xAxis = normalize({
+    x: rawX.x - zProjection * zAxis.x,
+    y: rawX.y - zProjection * zAxis.y,
+    z: rawX.z - zProjection * zAxis.z,
+  });
+  const yAxis = normalize(cross(zAxis, xAxis));
   return { origin, xAxis, yAxis, zAxis };
 }
 
@@ -46,6 +35,20 @@ export function toLocal(point: Vec3, basis: LocalBasis): Vec3 {
     x: dot(relative, basis.xAxis),
     y: dot(relative, basis.yAxis),
     z: dot(relative, basis.zAxis),
+  };
+}
+
+export function transformPlane(
+  plane: PlaneDefinition,
+  basis: LocalBasis,
+): PlaneDefinition {
+  return {
+    normal: {
+      x: dot(plane.normal, basis.xAxis),
+      y: dot(plane.normal, basis.yAxis),
+      z: dot(plane.normal, basis.zAxis),
+    },
+    constant: dot(plane.normal, basis.origin) + plane.constant,
   };
 }
 
