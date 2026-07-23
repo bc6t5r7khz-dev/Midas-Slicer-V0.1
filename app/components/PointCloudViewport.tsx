@@ -28,7 +28,11 @@ type Props = {
   previewFace: VolumeFace | null;
   draftNodeIds: number[];
   selectedNodeIds: number[];
+  invalidNodeIds: number[];
   selectedFaceIds: string[];
+  hoveredFaceId: string | null;
+  floorFaceId: string | null;
+  editableFaceId: string | null;
   volumeConfirmed: boolean;
   pickTarget: PickTarget;
   tolerance: number;
@@ -37,8 +41,15 @@ type Props = {
     clientX: number;
     clientY: number;
   } | null) => void;
+  onHoverFace: (faceId: string | null) => void;
   onPickNode: (nodeId: number) => void;
   onPickFace: (faceId: string) => void;
+  onRemoveFaceVertex: (faceId: string, nodeId: number) => void;
+  onInsertFaceVertex: (
+    faceId: string,
+    edgeIndex: number,
+    nodeId: number,
+  ) => void;
 };
 
 type SceneState = {
@@ -192,33 +203,51 @@ export default function PointCloudViewport({
   previewFace,
   draftNodeIds,
   selectedNodeIds,
+  invalidNodeIds,
   selectedFaceIds,
+  hoveredFaceId,
+  floorFaceId,
+  editableFaceId,
   volumeConfirmed,
   pickTarget,
   tolerance,
   onHover,
+  onHoverFace,
   onPickNode,
   onPickFace,
+  onRemoveFaceVertex,
+  onInsertFaceVertex,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneState | null>(null);
   const faceMeshesRef = useRef<THREE.Mesh[]>([]);
+  const faceEdgesRef = useRef<THREE.Line[]>([]);
   const fittedNodesRef = useRef<ModelNode[] | null>(null);
   const fittedBasisRef = useRef<LocalBasis | null>(null);
   const nodesRef = useRef(nodes);
   const sliceRef = useRef(slice);
   const pickTargetRef = useRef(pickTarget);
+  const editableFaceIdRef = useRef(editableFaceId);
+  const facesRef = useRef(faces);
   const onHoverRef = useRef(onHover);
+  const onHoverFaceRef = useRef(onHoverFace);
   const onPickNodeRef = useRef(onPickNode);
   const onPickFaceRef = useRef(onPickFace);
+  const onRemoveFaceVertexRef = useRef(onRemoveFaceVertex);
+  const onInsertFaceVertexRef = useRef(onInsertFaceVertex);
   const [renderError, setRenderError] = useState<string | null>(null);
 
   nodesRef.current = nodes;
   sliceRef.current = slice;
   pickTargetRef.current = pickTarget;
+  editableFaceIdRef.current = editableFaceId;
+  facesRef.current = faces;
   onHoverRef.current = onHover;
+  onHoverFaceRef.current = onHoverFace;
   onPickNodeRef.current = onPickNode;
   onPickFaceRef.current = onPickFace;
+  onRemoveFaceVertexRef.current = onRemoveFaceVertex;
+  onInsertFaceVertexRef.current = onInsertFaceVertex;
 
   const displayOffset = useMemo(() => {
     if (basis || !allNodes.length) return { x: 0, y: 0, z: 0 };
@@ -256,6 +285,9 @@ export default function PointCloudViewport({
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
       controls.screenSpacePanning = true;
+      controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+      controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
+      controls.mouseButtons.RIGHT = null as unknown as THREE.MOUSE;
 
       const grid = new THREE.GridHelper(240, 24, 0x254255, 0x142835);
       grid.rotation.x = Math.PI / 2;
@@ -282,7 +314,11 @@ export default function PointCloudViewport({
 
       const raycaster = new THREE.Raycaster();
       raycaster.params.Points = { threshold: 1.2 };
+      raycaster.params.Line = { threshold: 1.2 };
       const pointer = new THREE.Vector2();
+      let edgeDrag: { faceId: string; edgeIndex: number } | null = null;
+      let suppressNextClick = false;
+      let pointerStart: { x: number; y: number } | null = null;
 
       const updatePointer = (event: PointerEvent) => {
         const rect = renderer.domElement.getBoundingClientRect();
@@ -310,8 +346,29 @@ export default function PointCloudViewport({
       };
 
       const handleMove = (event: PointerEvent) => {
+        if (
+          pointerStart &&
+          Math.hypot(
+            event.clientX - pointerStart.x,
+            event.clientY - pointerStart.y,
+          ) > 4
+        ) {
+          suppressNextClick = true;
+        }
         const hit = getNodeHit(event);
-        renderer.domElement.style.cursor = hit ? "crosshair" : "grab";
+        updatePointer(event);
+        const faceHit = raycaster.intersectObjects(faceMeshesRef.current)[0];
+        const faceId = faceHit?.object.userData.faceId as string | undefined;
+        onHoverFaceRef.current(faceId ?? null);
+        renderer.domElement.style.cursor = edgeDrag
+          ? hit
+            ? "copy"
+            : "grabbing"
+          : hit
+            ? "crosshair"
+            : faceId
+              ? "pointer"
+              : "grab";
         if (hit?.index !== undefined) {
           onHoverRef.current({
             node: nodesRef.current[hit.index],
@@ -323,8 +380,67 @@ export default function PointCloudViewport({
         }
       };
 
+      const handlePointerDown = (event: PointerEvent) => {
+        if (event.button === 0) {
+          pointerStart = { x: event.clientX, y: event.clientY };
+        }
+        if (event.button !== 0 || !editableFaceIdRef.current) return;
+        updatePointer(event);
+        const edgeHit = raycaster
+          .intersectObjects(faceEdgesRef.current)
+          .find(
+            (hit) =>
+              hit.object.userData.faceId === editableFaceIdRef.current,
+          );
+        if (!edgeHit) return;
+        edgeDrag = {
+          faceId: edgeHit.object.userData.faceId as string,
+          edgeIndex: edgeHit.object.userData.edgeIndex as number,
+        };
+        suppressNextClick = true;
+        controls.enabled = false;
+        renderer.domElement.setPointerCapture(event.pointerId);
+        event.preventDefault();
+      };
+
+      const handlePointerUp = (event: PointerEvent) => {
+        if (event.button === 0) pointerStart = null;
+        if (!edgeDrag || event.button !== 0) return;
+        const nodeHit = getNodeHit(event);
+        if (nodeHit?.index !== undefined) {
+          onInsertFaceVertexRef.current(
+            edgeDrag.faceId,
+            edgeDrag.edgeIndex,
+            nodesRef.current[nodeHit.index].id,
+          );
+        }
+        edgeDrag = null;
+        controls.enabled = true;
+        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+          renderer.domElement.releasePointerCapture(event.pointerId);
+        }
+        event.preventDefault();
+      };
+
+      const handleContextMenu = (event: MouseEvent) => {
+        if (!editableFaceIdRef.current) return;
+        const nodeHit = getNodeHit(event as unknown as PointerEvent);
+        if (nodeHit?.index === undefined) return;
+        const nodeId = nodesRef.current[nodeHit.index].id;
+        const face = facesRef.current.find(
+          (candidate) => candidate.id === editableFaceIdRef.current,
+        );
+        if (!face?.nodeIds.includes(nodeId)) return;
+        event.preventDefault();
+        onRemoveFaceVertexRef.current(face.id, nodeId);
+      };
+
       const handleClick = (event: PointerEvent) => {
         if (event.button !== 0) return;
+        if (suppressNextClick) {
+          suppressNextClick = false;
+          return;
+        }
         updatePointer(event);
 
         if (pickTargetRef.current === "face") {
@@ -341,10 +457,15 @@ export default function PointCloudViewport({
       };
 
       renderer.domElement.addEventListener("pointermove", handleMove);
-      renderer.domElement.addEventListener("pointerleave", () =>
-        onHoverRef.current(null),
-      );
+      const handleLeave = () => {
+        onHoverRef.current(null);
+        onHoverFaceRef.current(null);
+      };
+      renderer.domElement.addEventListener("pointerleave", handleLeave);
+      renderer.domElement.addEventListener("pointerdown", handlePointerDown);
+      renderer.domElement.addEventListener("pointerup", handlePointerUp);
       renderer.domElement.addEventListener("click", handleClick);
+      renderer.domElement.addEventListener("contextmenu", handleContextMenu);
 
       const resizeObserver = new ResizeObserver(() => {
         const { clientWidth, clientHeight } = host;
@@ -401,7 +522,17 @@ export default function PointCloudViewport({
         cancelAnimationFrame(animationId);
         resizeObserver.disconnect();
         renderer.domElement.removeEventListener("pointermove", handleMove);
+        renderer.domElement.removeEventListener("pointerleave", handleLeave);
+        renderer.domElement.removeEventListener(
+          "pointerdown",
+          handlePointerDown,
+        );
+        renderer.domElement.removeEventListener("pointerup", handlePointerUp);
         renderer.domElement.removeEventListener("click", handleClick);
+        renderer.domElement.removeEventListener(
+          "contextmenu",
+          handleContextMenu,
+        );
         renderer.domElement.removeEventListener(
           "webglcontextlost",
           handleContextLost,
@@ -432,6 +563,7 @@ export default function PointCloudViewport({
     const coordinates = new Float32Array(nodes.length * 3);
     const base = new THREE.Color(0x72e6ff);
     const selected = new THREE.Color(0xffbf47);
+    const invalid = new THREE.Color(0xff4d62);
 
     nodes.forEach((node, index) => {
       const value = node.local ?? node.global;
@@ -441,7 +573,11 @@ export default function PointCloudViewport({
       coordinates[index * 3] = value.x;
       coordinates[index * 3 + 1] = value.y;
       coordinates[index * 3 + 2] = value.z;
-      const color = selectedNodeIds.includes(node.id) ? selected : base;
+      const color = invalidNodeIds.includes(node.id)
+        ? invalid
+        : selectedNodeIds.includes(node.id)
+          ? selected
+          : base;
       colors[index * 3] = color.r;
       colors[index * 3 + 1] = color.g;
       colors[index * 3 + 2] = color.b;
@@ -463,6 +599,10 @@ export default function PointCloudViewport({
     state.raycaster.params.Points.threshold = Math.max(
       (state.geometry.boundingSphere?.radius ?? 1) / 125,
       0.15,
+    );
+    state.raycaster.params.Line.threshold = Math.max(
+      (state.geometry.boundingSphere?.radius ?? 1) / 160,
+      0.12,
     );
     if (
       fittedNodesRef.current !== allNodes ||
@@ -492,12 +632,17 @@ export default function PointCloudViewport({
     if (!state || !colorAttribute || colorAttribute.count !== nodes.length) return;
     const base = new THREE.Color(0x72e6ff);
     const selected = new THREE.Color(0xffbf47);
+    const invalid = new THREE.Color(0xff4d62);
     nodes.forEach((node, index) => {
-      const color = selectedNodeIds.includes(node.id) ? selected : base;
+      const color = invalidNodeIds.includes(node.id)
+        ? invalid
+        : selectedNodeIds.includes(node.id)
+          ? selected
+          : base;
       colorAttribute.setXYZ(index, color.r, color.g, color.b);
     });
     colorAttribute.needsUpdate = true;
-  }, [nodes, selectedNodeIds]);
+  }, [invalidNodeIds, nodes, selectedNodeIds]);
 
   useEffect(() => {
     const state = sceneRef.current;
@@ -512,6 +657,7 @@ export default function PointCloudViewport({
     if (!state) return;
     disposeGroup(state.faceGroup);
     faceMeshesRef.current = [];
+    faceEdgesRef.current = [];
 
     const toDisplay = (point: Vec3) => (basis ? toLocal(point, basis) : point);
     const displayPlanes = faces.map((face) =>
@@ -600,7 +746,7 @@ export default function PointCloudViewport({
       );
       state.faceGroup.add(draftLine);
     }
-    if (draft.length >= 3) {
+    if (draft.length >= 3 && invalidNodeIds.length === 0) {
       polygons.push({
         vertices: draft,
         selected: true,
@@ -612,12 +758,24 @@ export default function PointCloudViewport({
       if (polygon.vertices.length < 3) continue;
       const geometry = triangulatePolygon(polygon.vertices, displayOffset);
       const material = new THREE.MeshBasicMaterial({
-        color: polygon.selected
-          ? 0xffbf47
-          : polygon.isSlice
-            ? 0xa9c3cc
-            : 0x91afba,
-        opacity: volumeConfirmed ? 0.19 : 0.25,
+        color:
+          polygon.faceId === floorFaceId
+            ? 0x4ce39a
+            : polygon.selected
+              ? 0xffbf47
+              : polygon.faceId === hoveredFaceId
+                ? 0x72e6ff
+                : polygon.isSlice
+                  ? 0xa9c3cc
+                  : 0x91afba,
+        opacity:
+          polygon.faceId === hoveredFaceId ||
+          polygon.faceId === floorFaceId ||
+          polygon.selected
+            ? 0.36
+            : volumeConfirmed
+              ? 0.19
+              : 0.25,
         transparent: true,
         depthWrite: false,
         side: THREE.DoubleSide,
@@ -642,6 +800,32 @@ export default function PointCloudViewport({
         }),
       );
       state.faceGroup.add(outline);
+
+      if (
+        polygon.faceId &&
+        polygon.faceId === editableFaceId &&
+        !volumeConfirmed
+      ) {
+        polygon.vertices.forEach((vertex, edgeIndex) => {
+          const nextVertex =
+            polygon.vertices[(edgeIndex + 1) % polygon.vertices.length];
+          const edge = new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints([
+              toThree(vertex, displayOffset),
+              toThree(nextVertex, displayOffset),
+            ]),
+            new THREE.LineBasicMaterial({
+              color: 0xffbf47,
+              opacity: 1,
+              transparent: true,
+            }),
+          );
+          edge.userData.faceId = polygon.faceId;
+          edge.userData.edgeIndex = edgeIndex;
+          faceEdgesRef.current.push(edge);
+          state.faceGroup.add(edge);
+        });
+      }
     }
   }, [
     allNodes,
@@ -650,7 +834,11 @@ export default function PointCloudViewport({
     displayOffset.y,
     displayOffset.z,
     draftNodeIds,
+    editableFaceId,
     faces,
+    floorFaceId,
+    hoveredFaceId,
+    invalidNodeIds,
     previewFace,
     selectedFaceIds,
     slice,

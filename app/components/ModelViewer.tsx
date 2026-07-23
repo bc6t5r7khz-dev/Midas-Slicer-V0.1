@@ -10,11 +10,17 @@ import { autoHullFaces } from "../lib/autoVolume";
 import { parseMctNodes } from "../lib/mctParser";
 import { createSampleMct } from "../lib/sampleModel";
 import { smartFaceFromSeed } from "../lib/smartSelect";
+import {
+  loadWorkspace,
+  saveWorkspace,
+  type SavedWorkspace,
+} from "../lib/workspaceStorage";
 import type {
   Bounds,
   LocalBasis,
   ModelNode,
   SliceRanges,
+  Vec3,
   VolumeFace,
   WorkflowTab,
 } from "../lib/types";
@@ -46,6 +52,18 @@ const fullSlice = (bounds: Bounds): SliceRanges => ({
   z: [...bounds.z],
 });
 
+const subtract = (a: Vec3, b: Vec3): Vec3 => ({
+  x: a.x - b.x,
+  y: a.y - b.y,
+  z: a.z - b.z,
+});
+
+const cross = (a: Vec3, b: Vec3): Vec3 => ({
+  x: a.y * b.z - a.z * b.y,
+  y: a.z * b.x - a.x * b.z,
+  z: a.x * b.y - a.y * b.x,
+});
+
 export default function ModelViewer() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [allNodes, setAllNodes] = useState<ModelNode[]>([]);
@@ -59,6 +77,7 @@ export default function ModelViewer() {
   const [selectedFaceIds, setSelectedFaceIds] = useState<Set<string>>(
     new Set(),
   );
+  const [hoveredFaceId, setHoveredFaceId] = useState<string | null>(null);
   const [volumeConfirmed, setVolumeConfirmed] = useState(false);
   const [confirmWarning, setConfirmWarning] = useState(false);
   const [floorFaceId, setFloorFaceId] = useState<string | null>(null);
@@ -78,6 +97,7 @@ export default function ModelViewer() {
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
 
   const tolerance = globalBounds ? modelTolerance(globalBounds) : 1e-6;
   const facePlanes = useMemo(() => faces.map((face) => face.plane), [faces]);
@@ -181,8 +201,101 @@ export default function ModelViewer() {
   );
 
   useEffect(() => {
-    loadText(createSampleMct(), "Demo bridge lattice");
+    let cancelled = false;
+    void loadWorkspace()
+      .then((saved) => {
+        if (cancelled) return;
+        if (!saved) {
+          loadText(createSampleMct(), "Demo bridge lattice");
+          return;
+        }
+        const restoredNodes: ModelNode[] = saved.nodes.map((node) => ({
+          ...node,
+          local: null,
+        }));
+        const nodes = saved.basis
+          ? transformNodes(restoredNodes, saved.basis)
+          : restoredNodes;
+        const bounds = getBounds(restoredNodes, false);
+        setAllNodes(nodes);
+        setFileName(saved.fileName);
+        setGlobalBounds(bounds);
+        setFaces(saved.faces);
+        setActiveTab(saved.activeTab);
+        setDefiningFaces(saved.definingFaces);
+        setSmartSelecting(saved.smartSelecting ?? false);
+        setDraftNodeIds(saved.draftNodeIds);
+        setSelectedFaceIds(new Set(saved.selectedFaceIds));
+        setVolumeConfirmed(saved.volumeConfirmed);
+        setFloorFaceId(saved.floorFaceId);
+        setXDirectionNodeIds(saved.xDirectionNodeIds);
+        setBasis(saved.basis);
+        setSlice(saved.slice);
+        setSelectedNode(
+          nodes.find((node) => node.id === saved.selectedNodeId) ?? null,
+        );
+        setStatus(
+          `${nodes.length.toLocaleString()} nodes restored from this browser.`,
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          loadText(createSampleMct(), "Demo bridge lattice");
+          setError("The saved workspace could not be restored.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [loadText]);
+
+  useEffect(() => {
+    if (!workspaceReady || !allNodes.length) return;
+    const timer = window.setTimeout(() => {
+      const workspace: SavedWorkspace = {
+        version: 1,
+        fileName,
+        nodes: allNodes.map(({ id, global }) => ({ id, global })),
+        faces,
+        activeTab,
+        definingFaces,
+        smartSelecting,
+        draftNodeIds,
+        selectedFaceIds: [...selectedFaceIds],
+        volumeConfirmed,
+        floorFaceId,
+        xDirectionNodeIds,
+        basis,
+        slice,
+        selectedNodeId: selectedNode?.id ?? null,
+      };
+      void saveWorkspace(workspace).catch(() => {
+        setError(
+          "This browser could not save the workspace. Its local storage may be full or disabled.",
+        );
+      });
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeTab,
+    allNodes,
+    basis,
+    definingFaces,
+    draftNodeIds,
+    faces,
+    fileName,
+    floorFaceId,
+    selectedFaceIds,
+    selectedNode?.id,
+    smartSelecting,
+    slice,
+    volumeConfirmed,
+    workspaceReady,
+    xDirectionNodeIds,
+  ]);
 
   const loadFile = async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".mct")) {
@@ -269,7 +382,7 @@ export default function ModelViewer() {
         if (draftNodeIds.length) {
           setDraftNodeIds((current) => current.slice(0, -1));
           setStatus("Last selected point removed.");
-        } else {
+        } else if (!event.repeat) {
           removeLastFace();
         }
       }
@@ -407,14 +520,104 @@ export default function ModelViewer() {
     }
 
     if (activeTab === "volume") {
-      setSelectedFaceIds((current) => {
-        const next = new Set(current);
-        if (next.has(faceId)) next.delete(faceId);
-        else next.add(faceId);
-        return next;
-      });
+      setSelectedFaceIds(new Set([faceId]));
+      setVolumeConfirmed(false);
+      const face = faces.find((candidate) => candidate.id === faceId);
+      setStatus(
+        `${face?.label ?? "Face"} highlighted. Right-click a vertex to remove it, or drag an edge to a point to add one.`,
+      );
     }
   };
+
+  const toggleFaceSelection = (faceId: string) => {
+    setSelectedFaceIds((current) => {
+      const next = new Set(current);
+      if (next.has(faceId)) next.delete(faceId);
+      else next.add(faceId);
+      return next;
+    });
+  };
+
+  const rebuildFace = useCallback(
+    (faceId: string, nodeIds: number[]) => {
+      const original = faces.find((face) => face.id === faceId);
+      if (!original) return false;
+      if (nodeIds.length < 3) {
+        setError("A face must keep at least three vertices.");
+        return false;
+      }
+      try {
+        const nodeMap = new Map(allNodes.map((node) => [node.id, node]));
+        const selected = nodeIds.map((id) => {
+          const node = nodeMap.get(id);
+          if (!node) throw new Error(`Node ${id} is no longer available.`);
+          return { id, point: node.global };
+        });
+        const replacement = createFace(
+          original.id,
+          original.label,
+          selected,
+          centroid(allNodes.map((node) => node.global)),
+          tolerance,
+        );
+        replacement.automatic = original.automatic;
+        replacement.smart = original.smart;
+        setFaces((current) =>
+          current.map((face) => (face.id === faceId ? replacement : face)),
+        );
+        setVolumeConfirmed(false);
+        setError(null);
+        return true;
+      } catch (caught) {
+        setError(
+          caught instanceof Error ? caught.message : "Could not edit that face.",
+        );
+        return false;
+      }
+    },
+    [allNodes, faces, tolerance],
+  );
+
+  const removeFaceVertex = useCallback(
+    (faceId: string, nodeId: number) => {
+      const face = faces.find((candidate) => candidate.id === faceId);
+      if (!face || !face.nodeIds.includes(nodeId)) return;
+      const changed = rebuildFace(
+        faceId,
+        face.nodeIds.filter((id) => id !== nodeId),
+      );
+      if (changed) setStatus(`Node #${nodeId} removed from ${face.label}.`);
+    },
+    [faces, rebuildFace],
+  );
+
+  const insertFaceVertex = useCallback(
+    (faceId: string, edgeIndex: number, nodeId: number) => {
+      const face = faces.find((candidate) => candidate.id === faceId);
+      const node = allNodes.find((candidate) => candidate.id === nodeId);
+      if (!face || !node) return;
+      if (face.nodeIds.includes(nodeId)) {
+        setError("That node is already a vertex of this face.");
+        return;
+      }
+      const distance = Math.abs(
+        face.plane.normal.x * node.global.x +
+          face.plane.normal.y * node.global.y +
+          face.plane.normal.z * node.global.z +
+          face.plane.constant,
+      );
+      if (distance > tolerance) {
+        setError("The new vertex must be on the face plane.");
+        return;
+      }
+      const nodeIds = [...face.nodeIds];
+      nodeIds.splice(edgeIndex + 1, 0, nodeId);
+      if (rebuildFace(faceId, nodeIds)) {
+        setStatus(`Node #${nodeId} added to ${face.label}.`);
+      }
+    },
+    [allNodes, faces, rebuildFace, tolerance],
+  );
 
   const deleteSelectedFaces = () => {
     if (!selectedFaceIds.size) return;
@@ -516,15 +719,80 @@ export default function ModelViewer() {
     }, 0);
   }, [displayNodes, slice]);
 
+  const editableFace = useMemo(() => {
+    if (
+      activeTab !== "volume" ||
+      definingFaces ||
+      smartSelecting ||
+      selectedFaceIds.size !== 1
+    ) {
+      return null;
+    }
+    return (
+      faces.find((face) => selectedFaceIds.has(face.id) && face.nodeIds.length) ??
+      null
+    );
+  }, [
+    activeTab,
+    definingFaces,
+    faces,
+    selectedFaceIds,
+    smartSelecting,
+  ]);
+
+  const invalidDraftNodeIds = useMemo(() => {
+    if (draftNodeIds.length < 4) return [];
+    const nodeMap = new Map(allNodes.map((node) => [node.id, node.global]));
+    const points = draftNodeIds
+      .map((id) => ({ id, point: nodeMap.get(id) }))
+      .filter(
+        (entry): entry is { id: number; point: Vec3 } => Boolean(entry.point),
+      );
+    let origin: Vec3 | null = null;
+    let normal: Vec3 | null = null;
+    for (let i = 0; i < points.length - 2 && !normal; i += 1) {
+      for (let j = i + 1; j < points.length - 1 && !normal; j += 1) {
+        for (let k = j + 1; k < points.length; k += 1) {
+          const candidate = cross(
+            subtract(points[j].point, points[i].point),
+            subtract(points[k].point, points[i].point),
+          );
+          const length = Math.hypot(candidate.x, candidate.y, candidate.z);
+          if (length > tolerance) {
+            origin = points[i].point;
+            normal = {
+              x: candidate.x / length,
+              y: candidate.y / length,
+              z: candidate.z / length,
+            };
+            break;
+          }
+        }
+      }
+    }
+    if (!origin || !normal) return [];
+    return points
+      .filter(({ point }) => {
+        const delta = subtract(point, origin);
+        return (
+          Math.abs(
+            delta.x * normal!.x +
+              delta.y * normal!.y +
+              delta.z * normal!.z,
+          ) > tolerance
+        );
+      })
+      .map(({ id }) => id);
+  }, [allNodes, draftNodeIds, tolerance]);
+
   const selectedNodeIds = useMemo(
-    () => [...draftNodeIds, ...xDirectionNodeIds],
-    [draftNodeIds, xDirectionNodeIds],
+    () => [
+      ...draftNodeIds,
+      ...xDirectionNodeIds,
+      ...(editableFace?.nodeIds ?? []),
+    ],
+    [draftNodeIds, editableFace, xDirectionNodeIds],
   );
-  const highlightedFaceIds = useMemo(() => {
-    const next = new Set(selectedFaceIds);
-    if (floorFaceId) next.add(floorFaceId);
-    return [...next];
-  }, [floorFaceId, selectedFaceIds]);
 
   const instruction =
     activeTab === "volume"
@@ -685,7 +953,11 @@ export default function ModelViewer() {
               <div className="selection-callout">
                 <strong>{draftNodeIds.length} selected</strong>
                 <span>
-                  {draftNodeIds.length >= 3
+                  {invalidDraftNodeIds.length
+                    ? `${invalidDraftNodeIds.length} red point${
+                        invalidDraftNodeIds.length === 1 ? " is" : "s are"
+                      } off the face plane`
+                    : draftNodeIds.length >= 3
                     ? "Press Space to close and create the face"
                     : `Trace ${3 - draftNodeIds.length} more point${
                         3 - draftNodeIds.length === 1 ? "" : "s"
@@ -727,7 +999,7 @@ export default function ModelViewer() {
                       <input
                         type="checkbox"
                         checked={selectedFaceIds.has(face.id)}
-                        onChange={() => handleFacePick(face.id)}
+                        onChange={() => toggleFaceSelection(face.id)}
                       />
                       <span>
                         <strong>{face.label}</strong>
@@ -908,15 +1180,27 @@ export default function ModelViewer() {
           previewFace={smartPreviewFace}
           draftNodeIds={draftNodeIds}
           selectedNodeIds={selectedNodeIds}
-          selectedFaceIds={highlightedFaceIds}
+          invalidNodeIds={invalidDraftNodeIds}
+          selectedFaceIds={[...selectedFaceIds]}
+          hoveredFaceId={hoveredFaceId}
+          floorFaceId={floorFaceId}
+          editableFaceId={editableFace?.id ?? null}
           volumeConfirmed={volumeConfirmed}
           pickTarget={
-            activeTab === "coordinates" && !floorFaceId ? "face" : "node"
+            (activeTab === "coordinates" && !floorFaceId) ||
+            (activeTab === "volume" &&
+              !definingFaces &&
+              !smartSelecting)
+              ? "face"
+              : "node"
           }
           tolerance={tolerance}
           onHover={setHover}
+          onHoverFace={setHoveredFaceId}
           onPickNode={handleNodePick}
           onPickFace={handleFacePick}
+          onRemoveFaceVertex={removeFaceVertex}
+          onInsertFaceVertex={insertFaceVertex}
         />
 
         <div className="view-hud top-left">
@@ -928,7 +1212,7 @@ export default function ModelViewer() {
             }`}
           />
           <strong>{instruction}</strong>
-          <span>Left drag orbit · Right drag pan · Scroll zoom</span>
+          <span>Left drag rotate · Middle drag pan · Scroll zoom</span>
         </div>
 
         <div className="axis-badge" aria-label="Local axis legend">
