@@ -302,6 +302,10 @@ button {
   padding: 0 22px 17px;
 }
 
+.action-grid .auto-wide {
+  grid-column: 1 / -1;
+}
+
 .selection-callout {
   display: flex;
   align-items: center;

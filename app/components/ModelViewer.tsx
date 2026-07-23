@@ -9,6 +9,7 @@ import {
 import { autoHullFaces } from "../lib/autoVolume";
 import { parseMctNodes } from "../lib/mctParser";
 import { createSampleMct } from "../lib/sampleModel";
+import { smartFaceFromSeed } from "../lib/smartSelect";
 import type {
   Bounds,
   LocalBasis,
@@ -23,8 +24,8 @@ import {
   centroid,
   createFace,
   isInsidePlanes,
+  isPointWithinFace,
   modelTolerance,
-  planeDistance,
 } from "../lib/volumeGeometry";
 import PointCloudViewport from "./PointCloudViewport";
 import RangeControl from "./RangeControl";
@@ -52,6 +53,7 @@ export default function ModelViewer() {
   const [activeTab, setActiveTab] = useState<WorkflowTab>("volume");
   const [faces, setFaces] = useState<VolumeFace[]>([]);
   const [definingFaces, setDefiningFaces] = useState(false);
+  const [smartSelecting, setSmartSelecting] = useState(false);
   const [draftNodeIds, setDraftNodeIds] = useState<number[]>([]);
   const [selectedFaceIds, setSelectedFaceIds] = useState<Set<string>>(
     new Set(),
@@ -88,8 +90,8 @@ export default function ModelViewer() {
     const draftSet = new Set(draftNodeIds);
 
     return allNodes.filter((node) => {
-      const onFace = facePlanes.some(
-        (plane) => Math.abs(planeDistance(plane, node.global)) <= tolerance,
+      const onFace = faces.some((face) =>
+        isPointWithinFace(node.global, face, tolerance),
       );
 
       if (!volumeConfirmed) {
@@ -106,6 +108,7 @@ export default function ModelViewer() {
     allNodes,
     definingNodeIds,
     draftNodeIds,
+    faces,
     facePlanes,
     tolerance,
     volumeConfirmed,
@@ -122,6 +125,7 @@ export default function ModelViewer() {
     setGlobalBounds(bounds);
     setFaces([]);
     setDefiningFaces(false);
+    setSmartSelecting(false);
     setDraftNodeIds([]);
     setSelectedFaceIds(new Set());
     setVolumeConfirmed(false);
@@ -172,8 +176,8 @@ export default function ModelViewer() {
   };
 
   const commitDraftFace = useCallback(() => {
-    if (!globalBounds || draftNodeIds.length < 3 || draftNodeIds.length > 4) {
-      setError("Select three or four nodes, then press Space.");
+    if (!globalBounds || draftNodeIds.length < 3) {
+      setError("Select at least three nodes, then press Space.");
       return;
     }
 
@@ -204,19 +208,55 @@ export default function ModelViewer() {
     }
   }, [allNodes, draftNodeIds, faces.length, globalBounds, tolerance]);
 
+  const removeLastFace = useCallback(() => {
+    const removed = faces.at(-1);
+    if (!removed) return;
+    setFaces((current) => current.slice(0, -1));
+    setSelectedFaceIds((current) => {
+      const next = new Set(current);
+      next.delete(removed.id);
+      return next;
+    });
+    setVolumeConfirmed(false);
+    if (floorFaceId === removed.id) {
+      setFloorFaceId(null);
+      setXDirectionNodeIds([]);
+      setBasis(null);
+      setAllNodes((current) =>
+        current.map((node) => ({ ...node, local: null })),
+      );
+      if (globalBounds) setSlice(fullSlice(globalBounds));
+    }
+    setStatus(`${removed.label} removed.`);
+  }, [faces, floorFaceId, globalBounds]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        activeTab !== "volume" ||
+        target?.matches("input, textarea, select, [contenteditable='true']")
+      ) {
+        return;
+      }
       if (
         event.code === "Space" &&
-        activeTab === "volume" &&
         definingFaces
       ) {
         event.preventDefault();
         commitDraftFace();
       }
+      if (event.code === "Backspace") {
+        event.preventDefault();
+        if (draftNodeIds.length) {
+          setDraftNodeIds((current) => current.slice(0, -1));
+          setStatus("Last selected point removed.");
+        } else {
+          removeLastFace();
+        }
+      }
       if (
         event.code === "Escape" &&
-        activeTab === "volume" &&
         definingFaces
       ) {
         setDraftNodeIds([]);
@@ -225,7 +265,22 @@ export default function ModelViewer() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeTab, commitDraftFace, definingFaces]);
+  }, [
+    activeTab,
+    commitDraftFace,
+    definingFaces,
+    draftNodeIds.length,
+    removeLastFace,
+  ]);
+
+  const smartPreviewFace = useMemo(() => {
+    if (!smartSelecting || !hover) return null;
+    try {
+      return smartFaceFromSeed(allNodes, hover.node.id, tolerance);
+    } catch {
+      return null;
+    }
+  }, [allNodes, hover?.node.id, smartSelecting, tolerance]);
 
   const applyCoordinateSystem = (
     nextDirectionNodeIds: number[],
@@ -264,13 +319,34 @@ export default function ModelViewer() {
     if (!node) return;
     setSelectedNode(node);
 
+    if (activeTab === "volume" && smartSelecting) {
+      try {
+        const candidate =
+          hover?.node.id === nodeId && smartPreviewFace
+            ? smartPreviewFace
+            : smartFaceFromSeed(allNodes, nodeId, tolerance);
+        const face: VolumeFace = {
+          ...candidate,
+          id: `smart-${crypto.randomUUID()}`,
+          label: `Face ${faces.length + 1}`,
+        };
+        setFaces((current) => [...current, face]);
+        setVolumeConfirmed(false);
+        setStatus(`${face.label} added by Smart Select. Hover for the next.`);
+        setError(null);
+      } catch (caught) {
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : "No planar face was found here.",
+        );
+      }
+      return;
+    }
+
     if (activeTab === "volume" && definingFaces) {
       setDraftNodeIds((current) => {
         if (current.includes(nodeId)) return current.filter((id) => id !== nodeId);
-        if (current.length >= 4) {
-          setError("A face can contain at most four selected nodes.");
-          return current;
-        }
         return [...current, nodeId];
       });
       return;
@@ -340,6 +416,7 @@ export default function ModelViewer() {
     setFaces([]);
     setDraftNodeIds([]);
     setSelectedFaceIds(new Set());
+    setSmartSelecting(false);
     setVolumeConfirmed(false);
     setFloorFaceId(null);
     setXDirectionNodeIds([]);
@@ -365,6 +442,7 @@ export default function ModelViewer() {
     }
     setVolumeConfirmed(true);
     setDefiningFaces(false);
+    setSmartSelecting(false);
     setDraftNodeIds([]);
     setStatus("Closed inspection volume confirmed.");
   };
@@ -377,6 +455,7 @@ export default function ModelViewer() {
       setSelectedFaceIds(new Set());
       setDraftNodeIds([]);
       setDefiningFaces(false);
+      setSmartSelecting(false);
       setVolumeConfirmed(false);
       setFloorFaceId(null);
       setStatus(
@@ -422,8 +501,12 @@ export default function ModelViewer() {
   const instruction =
     activeTab === "volume"
       ? definingFaces
-        ? `${draftNodeIds.length}/4 nodes · Space creates face`
-        : "Begin manual definition or auto-define"
+        ? `${draftNodeIds.length} nodes · Space creates face`
+        : smartSelecting
+          ? smartPreviewFace
+            ? "Click to add the highlighted face"
+            : "Hover an exterior planar patch"
+          : "Begin, Smart Select, or Auto-Define"
       : activeTab === "coordinates"
         ? !floorFaceId
           ? "Select the floor face"
@@ -507,6 +590,7 @@ export default function ModelViewer() {
               onClick={() => {
                 setActiveTab(tab.id);
                 setDefiningFaces(false);
+                setSmartSelecting(false);
                 setDraftNodeIds([]);
               }}
             >
@@ -522,8 +606,9 @@ export default function ModelViewer() {
               <span className="eyebrow">CONVEX BOUNDARY</span>
               <h1>Define the inspection volume</h1>
               <p>
-                Pick 3–4 coplanar nodes per face and press Space. Face-plane
-                nodes peel away automatically.
+                Pick 3 or more coplanar nodes and press Space, or hover and
+                click with Smart Select. Only nodes inside the face boundary
+                peel away.
               </p>
             </section>
 
@@ -532,12 +617,33 @@ export default function ModelViewer() {
                 className={`button ${definingFaces ? "primary" : ""}`}
                 onClick={() => {
                   setDefiningFaces((current) => !current);
+                  setSmartSelecting(false);
                   setDraftNodeIds([]);
+                  setVolumeConfirmed(false);
                 }}
               >
                 {definingFaces ? "Defining…" : "Begin"}
               </button>
-              <button className="button" onClick={autoDefine}>
+              <button
+                className={`button ${smartSelecting ? "primary" : ""}`}
+                onClick={() => {
+                  setSmartSelecting((current) => {
+                    const next = !current;
+                    setStatus(
+                      next
+                        ? "Hover a planar exterior patch, then click to add it."
+                        : "Smart Select ended.",
+                    );
+                    return next;
+                  });
+                  setDefiningFaces(false);
+                  setDraftNodeIds([]);
+                  setVolumeConfirmed(false);
+                }}
+              >
+                Smart Select
+              </button>
+              <button className="button auto-wide" onClick={autoDefine}>
                 Auto-Define
               </button>
             </div>
@@ -595,6 +701,8 @@ export default function ModelViewer() {
                         <small>
                           {face.automatic
                             ? "Auto plane"
+                            : face.smart
+                              ? `Smart plane · ${face.nodeIds.length} boundary nodes`
                             : `${face.nodeIds.length} nodes`}
                         </small>
                       </span>
@@ -764,6 +872,7 @@ export default function ModelViewer() {
           slice={slice}
           basis={basis}
           faces={faces}
+          previewFace={smartPreviewFace}
           draftNodeIds={draftNodeIds}
           selectedNodeIds={selectedNodeIds}
           selectedFaceIds={highlightedFaceIds}
@@ -780,7 +889,9 @@ export default function ModelViewer() {
         <div className="view-hud top-left">
           <span
             className={`mode-indicator ${
-              definingFaces || activeTab === "coordinates" ? "picking" : ""
+              definingFaces || smartSelecting || activeTab === "coordinates"
+                ? "picking"
+                : ""
             }`}
           />
           <strong>{instruction}</strong>

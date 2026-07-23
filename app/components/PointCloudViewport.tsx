@@ -13,10 +13,10 @@ import type {
 } from "../lib/types";
 import {
   buildPolyhedron,
+  coplanarConvexHull,
   cross,
   normalize,
   slicePlanes,
-  sortCoplanarPoints,
   subtract,
 } from "../lib/volumeGeometry";
 
@@ -28,6 +28,7 @@ type Props = {
   slice: SliceRanges;
   basis: LocalBasis | null;
   faces: VolumeFace[];
+  previewFace: VolumeFace | null;
   draftNodeIds: number[];
   selectedNodeIds: number[];
   selectedFaceIds: string[];
@@ -158,6 +159,7 @@ export default function PointCloudViewport({
   slice,
   basis,
   faces,
+  previewFace,
   draftNodeIds,
   selectedNodeIds,
   selectedFaceIds,
@@ -515,6 +517,14 @@ export default function PointCloudViewport({
       }
     }
 
+    if (previewFace) {
+      polygons.push({
+        vertices: previewFace.vertices.map(toDisplay),
+        selected: true,
+        isSlice: false,
+      });
+    }
+
     const nodeMap = new Map(allNodes.map((node) => [node.id, node]));
     if (draftNodeIds.length >= 3) {
       const draft = draftNodeIds
@@ -527,7 +537,7 @@ export default function PointCloudViewport({
             cross(subtract(draft[1], draft[0]), subtract(draft[2], draft[0])),
           );
           polygons.push({
-            vertices: sortCoplanarPoints(draft, normal),
+            vertices: coplanarConvexHull(draft, normal),
             selected: true,
             isSlice: false,
           });
@@ -580,6 +590,7 @@ export default function PointCloudViewport({
     displayOffset.z,
     draftNodeIds,
     faces,
+    previewFace,
     selectedFaceIds,
     slice,
     tolerance,

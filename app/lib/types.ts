@@ -30,6 +30,7 @@ export type VolumeFace = {
   vertices: Vec3[];
   plane: PlaneDefinition;
   automatic?: boolean;
+  smart?: boolean;
 };
 
 export type Polyhedron = {

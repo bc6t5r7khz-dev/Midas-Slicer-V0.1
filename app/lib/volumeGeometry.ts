@@ -85,6 +85,69 @@ export function sortCoplanarPoints(points: Vec3[], normal: Vec3): Vec3[] {
   });
 }
 
+type ProjectedPoint = {
+  point: Vec3;
+  x: number;
+  y: number;
+};
+
+function cross2D(
+  origin: Pick<ProjectedPoint, "x" | "y">,
+  a: Pick<ProjectedPoint, "x" | "y">,
+  b: Pick<ProjectedPoint, "x" | "y">,
+) {
+  return (a.x - origin.x) * (b.y - origin.y) -
+    (a.y - origin.y) * (b.x - origin.x);
+}
+
+/** Returns the outer boundary of coplanar points in counter-clockwise order. */
+export function coplanarConvexHull(points: Vec3[], normal: Vec3): Vec3[] {
+  const [u, v] = basisOnPlane(normal);
+  const projected: ProjectedPoint[] = points.map((point) => ({
+    point,
+    x: dot(point, u),
+    y: dot(point, v),
+  }));
+  projected.sort((a, b) => a.x - b.x || a.y - b.y);
+
+  const unique = projected.filter(
+    (point, index) =>
+      index === 0 ||
+      Math.abs(point.x - projected[index - 1].x) > EPSILON ||
+      Math.abs(point.y - projected[index - 1].y) > EPSILON,
+  );
+  if (unique.length <= 3) return unique.map(({ point }) => point);
+
+  const lower: ProjectedPoint[] = [];
+  for (const point of unique) {
+    while (
+      lower.length >= 2 &&
+      cross2D(lower[lower.length - 2], lower[lower.length - 1], point) <=
+        EPSILON
+    ) {
+      lower.pop();
+    }
+    lower.push(point);
+  }
+
+  const upper: ProjectedPoint[] = [];
+  for (let index = unique.length - 1; index >= 0; index -= 1) {
+    const point = unique[index];
+    while (
+      upper.length >= 2 &&
+      cross2D(upper[upper.length - 2], upper[upper.length - 1], point) <=
+        EPSILON
+    ) {
+      upper.pop();
+    }
+    upper.push(point);
+  }
+
+  return [...lower.slice(0, -1), ...upper.slice(0, -1)].map(
+    ({ point }) => point,
+  );
+}
+
 export function createFace(
   id: string,
   label: string,
@@ -92,8 +155,8 @@ export function createFace(
   cloudCenter: Vec3,
   tolerance: number,
 ): VolumeFace {
-  if (nodes.length < 3 || nodes.length > 4) {
-    throw new Error("A face needs three or four nodes.");
+  if (nodes.length < 3) {
+    throw new Error("A face needs at least three nodes.");
   }
 
   let normal = normalize(
@@ -120,12 +183,75 @@ export function createFace(
     id,
     label,
     nodeIds: nodes.map((node) => node.id),
-    vertices: sortCoplanarPoints(
+    vertices: coplanarConvexHull(
       nodes.map((node) => node.point),
       normal,
     ),
     plane: { normal, constant },
   };
+}
+
+/**
+ * Tests the finite polygon, not the infinite plane. This keeps distant
+ * coplanar patches visible when a manually defined face peels the point cloud.
+ */
+export function isPointWithinFace(
+  point: Vec3,
+  face: Pick<VolumeFace, "vertices" | "plane">,
+  tolerance: number,
+): boolean {
+  if (
+    face.vertices.length < 3 ||
+    Math.abs(planeDistance(face.plane, point)) > tolerance
+  ) {
+    return false;
+  }
+
+  const [u, v] = basisOnPlane(face.plane.normal);
+  const polygon = face.vertices.map((vertex) => ({
+    x: dot(vertex, u),
+    y: dot(vertex, v),
+  }));
+  const target = { x: dot(point, u), y: dot(point, v) };
+
+  let inside = false;
+  for (
+    let current = 0, previous = polygon.length - 1;
+    current < polygon.length;
+    previous = current, current += 1
+  ) {
+    const a = polygon[previous];
+    const b = polygon[current];
+    const edgeX = b.x - a.x;
+    const edgeY = b.y - a.y;
+    const edgeLengthSquared = edgeX * edgeX + edgeY * edgeY;
+    const projection =
+      edgeLengthSquared > EPSILON
+        ? Math.max(
+            0,
+            Math.min(
+              1,
+              ((target.x - a.x) * edgeX + (target.y - a.y) * edgeY) /
+                edgeLengthSquared,
+            ),
+          )
+        : 0;
+    if (
+      Math.hypot(
+        target.x - (a.x + projection * edgeX),
+        target.y - (a.y + projection * edgeY),
+      ) <= tolerance
+    ) {
+      return true;
+    }
+
+    const crosses =
+      (a.y > target.y) !== (b.y > target.y) &&
+      target.x <
+        ((b.x - a.x) * (target.y - a.y)) / (b.y - a.y) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
 }
 
 function intersectPlanes(
