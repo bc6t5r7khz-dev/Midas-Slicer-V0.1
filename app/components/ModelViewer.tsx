@@ -6,6 +6,7 @@ import {
   getBounds,
   transformNodes,
 } from "../lib/coordinateSystem";
+import { autoHullFaces } from "../lib/autoVolume";
 import { parseMctNodes } from "../lib/mctParser";
 import { createSampleMct } from "../lib/sampleModel";
 import type {
@@ -370,14 +371,28 @@ export default function ModelViewer() {
 
   const autoDefine = () => {
     if (!globalBounds) return;
-    const generated = autoBoxFaces(globalBounds);
-    setFaces(generated);
-    setSelectedFaceIds(new Set());
-    setDraftNodeIds([]);
-    setDefiningFaces(false);
-    setVolumeConfirmed(false);
-    setFloorFaceId(null);
-    setStatus("Six bounding faces generated. Review or confirm the volume.");
+    try {
+      const generated = autoHullFaces(allNodes, globalBounds);
+      setFaces(generated);
+      setSelectedFaceIds(new Set());
+      setDraftNodeIds([]);
+      setDefiningFaces(false);
+      setVolumeConfirmed(false);
+      setFloorFaceId(null);
+      setStatus(
+        `${generated.length} shape-aware hull faces generated. Review or confirm the volume.`,
+      );
+      setError(null);
+    } catch (caught) {
+      setError(
+        `${
+          caught instanceof Error ? caught.message : "Hull generation failed."
+        } A bounding box was used instead.`,
+      );
+      const fallback = autoBoxFaces(globalBounds);
+      setFaces(fallback);
+      setStatus("Hull fallback: six bounding faces generated.");
+    }
   };
 
   const visibleCount = useMemo(() => {
