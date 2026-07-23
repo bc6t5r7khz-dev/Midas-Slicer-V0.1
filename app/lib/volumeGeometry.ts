@@ -344,6 +344,46 @@ export const isInsidePlanes = (
   tolerance: number,
 ) => planes.every((plane) => planeDistance(plane, point) <= tolerance);
 
+/** Clips one polygon against a collection of half-spaces. */
+export function clipPolygonToPlanes(
+  vertices: Vec3[],
+  planes: PlaneDefinition[],
+  tolerance: number,
+): Vec3[] {
+  let polygon = [...vertices];
+  for (const plane of planes) {
+    if (!polygon.length) break;
+    const clipped: Vec3[] = [];
+    for (
+      let currentIndex = 0, previousIndex = polygon.length - 1;
+      currentIndex < polygon.length;
+      previousIndex = currentIndex, currentIndex += 1
+    ) {
+      const previous = polygon[previousIndex];
+      const current = polygon[currentIndex];
+      const previousDistance = planeDistance(plane, previous);
+      const currentDistance = planeDistance(plane, current);
+      const previousInside = previousDistance <= tolerance;
+      const currentInside = currentDistance <= tolerance;
+
+      if (previousInside !== currentInside) {
+        const denominator = previousDistance - currentDistance;
+        if (Math.abs(denominator) > EPSILON) {
+          const amount = previousDistance / denominator;
+          clipped.push({
+            x: previous.x + (current.x - previous.x) * amount,
+            y: previous.y + (current.y - previous.y) * amount,
+            z: previous.z + (current.z - previous.z) * amount,
+          });
+        }
+      }
+      if (currentInside) clipped.push(current);
+    }
+    polygon = clipped;
+  }
+  return polygon;
+}
+
 export function slicePlanes(bounds: Bounds): PlaneDefinition[] {
   return [
     { normal: { x: -1, y: 0, z: 0 }, constant: bounds.x[0] },

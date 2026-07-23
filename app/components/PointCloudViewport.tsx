@@ -13,6 +13,7 @@ import type {
 } from "../lib/types";
 import {
   buildPolyhedron,
+  clipPolygonToPlanes,
   coplanarConvexHull,
   cross,
   normalize,
@@ -489,7 +490,29 @@ export default function PointCloudViewport({
       isSlice: boolean;
     }> = [];
 
-    if (volumeConfirmed && displayPlanes.length >= 4) {
+    const exactAutomaticVolume =
+      volumeConfirmed &&
+      faces.length >= 4 &&
+      faces.every((face) => face.automatic);
+
+    if (exactAutomaticVolume) {
+      const clippingPlanes = slicePlanes(slice);
+      for (const face of faces) {
+        const vertices = clipPolygonToPlanes(
+          face.vertices.map(toDisplay),
+          clippingPlanes,
+          tolerance,
+        );
+        if (vertices.length >= 3) {
+          polygons.push({
+            vertices,
+            faceId: face.id,
+            selected: selectedFaceIds.includes(face.id),
+            isSlice: false,
+          });
+        }
+      }
+    } else if (volumeConfirmed && displayPlanes.length >= 4) {
       const clipped = buildPolyhedron(
         [...displayPlanes, ...slicePlanes(slice)],
         tolerance,

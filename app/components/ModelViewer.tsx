@@ -80,6 +80,10 @@ export default function ModelViewer() {
 
   const tolerance = globalBounds ? modelTolerance(globalBounds) : 1e-6;
   const facePlanes = useMemo(() => faces.map((face) => face.plane), [faces]);
+  const automaticVolume = useMemo(
+    () => faces.length >= 4 && faces.every((face) => face.automatic),
+    [faces],
+  );
   const definingNodeIds = useMemo(
     () => new Set(faces.flatMap((face) => face.nodeIds)),
     [faces],
@@ -98,7 +102,9 @@ export default function ModelViewer() {
         return !onFace || draftSet.has(node.id);
       }
 
-      const inside = isInsidePlanes(node.global, facePlanes, tolerance);
+      const inside =
+        automaticVolume ||
+        isInsidePlanes(node.global, facePlanes, tolerance);
       return (
         inside &&
         (!onFace || definingNodeIds.has(node.id) || draftSet.has(node.id))
@@ -106,6 +112,7 @@ export default function ModelViewer() {
     });
   }, [
     allNodes,
+    automaticVolume,
     definingNodeIds,
     draftNodeIds,
     faces,
@@ -429,14 +436,18 @@ export default function ModelViewer() {
   };
 
   const confirmVolume = () => {
-    const polyhedron = buildPolyhedron(facePlanes, tolerance);
+    const polyhedron = automaticVolume
+      ? true
+      : buildPolyhedron(facePlanes, tolerance);
     if (!polyhedron) {
       setConfirmWarning(true);
       return;
     }
-    const retained = allNodes.filter((node) =>
-      isInsidePlanes(node.global, facePlanes, tolerance),
-    );
+    const retained = automaticVolume
+      ? allNodes
+      : allNodes.filter((node) =>
+          isInsidePlanes(node.global, facePlanes, tolerance),
+        );
     if (retained.length) {
       setSlice(fullSlice(getBounds(retained, Boolean(basis))));
     }
@@ -459,7 +470,7 @@ export default function ModelViewer() {
       setVolumeConfirmed(false);
       setFloorFaceId(null);
       setStatus(
-        `${generated.length} shape-aware hull faces generated. Review or confirm the volume.`,
+        `${generated.length} exact node-defined hull faces generated. Review or confirm the volume.`,
       );
       setError(null);
     } catch (caught) {
@@ -700,7 +711,7 @@ export default function ModelViewer() {
                         <strong>{face.label}</strong>
                         <small>
                           {face.automatic
-                            ? "Auto plane"
+                            ? `${face.nodeIds.length} MCT boundary nodes`
                             : face.smart
                               ? `Smart plane · ${face.nodeIds.length} boundary nodes`
                             : `${face.nodeIds.length} nodes`}
