@@ -24,6 +24,7 @@ import {
   centroid,
   createFace,
   isInsidePlanes,
+  isPointOnFaceBoundary,
   isPointWithinFace,
   modelTolerance,
 } from "../lib/volumeGeometry";
@@ -94,12 +95,17 @@ export default function ModelViewer() {
     const draftSet = new Set(draftNodeIds);
 
     return allNodes.filter((node) => {
-      const onFace = faces.some((face) =>
-        isPointWithinFace(node.global, face, tolerance),
-      );
+      let onFace = false;
+      let onFaceEdge = false;
+      for (const face of faces) {
+        if (isPointWithinFace(node.global, face, tolerance)) onFace = true;
+        if (isPointOnFaceBoundary(node.global, face, tolerance)) {
+          onFaceEdge = true;
+        }
+      }
 
       if (!volumeConfirmed) {
-        return !onFace || draftSet.has(node.id);
+        return !onFace || onFaceEdge || draftSet.has(node.id);
       }
 
       const inside =
@@ -107,7 +113,12 @@ export default function ModelViewer() {
         isInsidePlanes(node.global, facePlanes, tolerance);
       return (
         inside &&
-        (!onFace || definingNodeIds.has(node.id) || draftSet.has(node.id))
+        (
+          !onFace ||
+          onFaceEdge ||
+          definingNodeIds.has(node.id) ||
+          draftSet.has(node.id)
+        )
       );
     });
   }, [

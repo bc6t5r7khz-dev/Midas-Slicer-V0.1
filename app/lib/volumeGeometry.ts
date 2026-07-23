@@ -254,6 +254,44 @@ export function isPointWithinFace(
   return inside;
 }
 
+/**
+ * Identifies points on the finite polygon perimeter, including intermediate
+ * nodes along an edge rather than only the vertices used to define that edge.
+ */
+export function isPointOnFaceBoundary(
+  point: Vec3,
+  face: Pick<VolumeFace, "vertices" | "plane">,
+  tolerance: number,
+): boolean {
+  if (
+    face.vertices.length < 2 ||
+    Math.abs(planeDistance(face.plane, point)) > tolerance
+  ) {
+    return false;
+  }
+
+  for (
+    let current = 0, previous = face.vertices.length - 1;
+    current < face.vertices.length;
+    previous = current, current += 1
+  ) {
+    const start = face.vertices[previous];
+    const end = face.vertices[current];
+    const edge = subtract(end, start);
+    const edgeLengthSquared = dot(edge, edge);
+    const amount =
+      edgeLengthSquared > EPSILON
+        ? Math.max(
+            0,
+            Math.min(1, dot(subtract(point, start), edge) / edgeLengthSquared),
+          )
+        : 0;
+    const closest = add(start, scale(edge, amount));
+    if (length(subtract(point, closest)) <= tolerance * 2) return true;
+  }
+  return false;
+}
+
 function intersectPlanes(
   a: PlaneDefinition,
   b: PlaneDefinition,
