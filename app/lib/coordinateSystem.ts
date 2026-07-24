@@ -38,6 +38,64 @@ export function toLocal(point: Vec3, basis: LocalBasis): Vec3 {
   };
 }
 
+export function toGlobal(point: Vec3, basis: LocalBasis): Vec3 {
+  return {
+    x:
+      basis.origin.x +
+      point.x * basis.xAxis.x +
+      point.y * basis.yAxis.x +
+      point.z * basis.zAxis.x,
+    y:
+      basis.origin.y +
+      point.x * basis.xAxis.y +
+      point.y * basis.yAxis.y +
+      point.z * basis.zAxis.y,
+    z:
+      basis.origin.z +
+      point.x * basis.xAxis.z +
+      point.y * basis.yAxis.z +
+      point.z * basis.zAxis.z,
+  };
+}
+
+export function reframePoint(
+  point: Vec3,
+  fromBasis: LocalBasis | null,
+  toBasis: LocalBasis | null,
+): Vec3 {
+  const global = fromBasis ? toGlobal(point, fromBasis) : point;
+  return toBasis ? toLocal(global, toBasis) : global;
+}
+
+export function reframeDirection(
+  direction: Vec3,
+  fromBasis: LocalBasis | null,
+  toBasis: LocalBasis | null,
+): Vec3 {
+  const global = fromBasis
+    ? {
+        x:
+          direction.x * fromBasis.xAxis.x +
+          direction.y * fromBasis.yAxis.x +
+          direction.z * fromBasis.zAxis.x,
+        y:
+          direction.x * fromBasis.xAxis.y +
+          direction.y * fromBasis.yAxis.y +
+          direction.z * fromBasis.zAxis.y,
+        z:
+          direction.x * fromBasis.xAxis.z +
+          direction.y * fromBasis.yAxis.z +
+          direction.z * fromBasis.zAxis.z,
+      }
+    : direction;
+  if (!toBasis) return global;
+  return {
+    x: dot(global, toBasis.xAxis),
+    y: dot(global, toBasis.yAxis),
+    z: dot(global, toBasis.zAxis),
+  };
+}
+
 export function transformPlane(
   plane: PlaneDefinition,
   basis: LocalBasis,

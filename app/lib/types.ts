@@ -78,6 +78,9 @@ export type RebarRun = {
   distributionVector?: Vec3;
   pathStart?: Vec3;
   pathEnd?: Vec3;
+  objectLines?: RebarLine[];
+  objectPathStart?: Vec3;
+  objectPathEnd?: Vec3;
   spacingInches: number;
   positions: number[];
   lines: RebarLine[];

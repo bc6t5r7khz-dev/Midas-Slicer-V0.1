@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createBasisFromFloor,
   getBounds,
+  reframeDirection,
+  reframePoint,
   transformNodes,
 } from "../lib/coordinateSystem";
 import { autoHullFaces } from "../lib/autoVolume";
@@ -75,6 +77,73 @@ const subtract = (a: Vec3, b: Vec3): Vec3 => ({
   y: a.y - b.y,
   z: a.z - b.z,
 });
+
+const reframeRebarLine = (
+  line: RebarLine,
+  fromBasis: LocalBasis | null,
+  toBasis: LocalBasis | null,
+): RebarLine => ({
+  ...line,
+  points: line.points.map((point) =>
+    reframePoint(point, fromBasis, toBasis),
+  ),
+});
+
+const reframeRebarRun = (
+  run: RebarRun,
+  fromBasis: LocalBasis | null,
+  toBasis: LocalBasis | null,
+): RebarRun => {
+  const objectLines =
+    run.objectLines ??
+    run.lines.map((line) =>
+      reframeRebarLine(line, fromBasis, null),
+    );
+  const objectPathStart =
+    run.objectPathStart ??
+    (run.pathStart
+      ? reframePoint(run.pathStart, fromBasis, null)
+      : undefined);
+  const objectPathEnd =
+    run.objectPathEnd ??
+    (run.pathEnd
+      ? reframePoint(run.pathEnd, fromBasis, null)
+      : undefined);
+  const pathStart = objectPathStart
+    ? reframePoint(objectPathStart, null, toBasis)
+    : undefined;
+  const pathEnd = objectPathEnd
+    ? reframePoint(objectPathEnd, null, toBasis)
+    : undefined;
+  let distributionVector = run.distributionVector
+    ? reframeDirection(run.distributionVector, fromBasis, toBasis)
+    : undefined;
+  if (pathStart && pathEnd) {
+    const delta = subtract(pathEnd, pathStart);
+    const length = Math.hypot(delta.x, delta.y, delta.z);
+    if (length > 1e-12) {
+      distributionVector = {
+        x: delta.x / length,
+        y: delta.y / length,
+        z: delta.z / length,
+      };
+    }
+  }
+  return {
+    ...run,
+    start: pathStart?.[run.axis] ?? run.start,
+    end: pathEnd?.[run.axis] ?? run.end,
+    pathStart,
+    pathEnd,
+    objectLines,
+    objectPathStart,
+    objectPathEnd,
+    distributionVector,
+    lines: objectLines.map((line) =>
+      reframeRebarLine(line, null, toBasis),
+    ),
+  };
+};
 
 const cross = (a: Vec3, b: Vec3): Vec3 => ({
   x: a.y * b.z - a.z * b.y,
@@ -245,6 +314,33 @@ export default function ModelViewer() {
     const candidates = displayNodes.length ? displayNodes : allNodes;
     return getBounds(candidates, Boolean(basis));
   }, [allNodes, basis, displayNodes]);
+  const reframeRebar = useCallback(
+    (fromBasis: LocalBasis | null, toBasis: LocalBasis | null) => {
+      if (fromBasis === toBasis) return;
+      setRebarRuns((current) =>
+        current.map((run) =>
+          reframeRebarRun(run, fromBasis, toBasis),
+        ),
+      );
+      setRebarLines((current) =>
+        current.map((line) =>
+          reframeRebarLine(line, fromBasis, toBasis),
+        ),
+      );
+      setPendingRebarLine((current) =>
+        current
+          ? reframeRebarLine(current, fromBasis, toBasis)
+          : null,
+      );
+      setRebarPathStart((current) =>
+        current ? reframePoint(current, fromBasis, toBasis) : null,
+      );
+      setRebarPathEnd((current) =>
+        current ? reframePoint(current, fromBasis, toBasis) : null,
+      );
+    },
+    [],
+  );
   const rebarEndBookmarks = useMemo(
     () =>
       rebarRuns
@@ -404,7 +500,15 @@ export default function ModelViewer() {
         setShowElementSkin(saved.showElementSkin ?? Boolean(saved.elements?.length));
         setElementSkinVolume(saved.elementSkinVolume ?? false);
         setInchesPerModelUnit(saved.inchesPerModelUnit ?? null);
-        setRebarRuns(saved.rebarRuns ?? []);
+        setRebarRuns(
+          (saved.rebarRuns ?? []).map((run) =>
+            reframeRebarRun(
+              run,
+              saved.basis,
+              saved.basis,
+            ),
+          ),
+        );
         setShowConcreteSkin(saved.showConcreteSkin ?? true);
         setFileName(saved.fileName);
         setGlobalBounds(bounds);
@@ -592,6 +696,7 @@ export default function ModelViewer() {
     if (floorFaceId === removed.id) {
       setFloorFaceId(null);
       setXDirectionNodeIds([]);
+      reframeRebar(basis, null);
       setBasis(null);
       setAllNodes((current) =>
         current.map((node) => ({ ...node, local: null })),
@@ -599,7 +704,7 @@ export default function ModelViewer() {
       if (globalBounds) setSlice(fullSlice(globalBounds));
     }
     setStatus(`${removed.label} removed.`);
-  }, [faces, floorFaceId, globalBounds]);
+  }, [basis, faces, floorFaceId, globalBounds, reframeRebar]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -693,9 +798,12 @@ export default function ModelViewer() {
       );
       const transformed = transformNodes(allNodes, nextBasis);
       const bounds = getBounds(transformed);
+      reframeRebar(basis, nextBasis);
       setAllNodes(transformed);
       setBasis(nextBasis);
       setSlice(fullSlice(bounds));
+      setRebarStart(bounds[rebarAxis][0]);
+      setRebarEnd(bounds[rebarAxis][1]);
       setStatus("Floor aligned to XY and local X direction applied.");
       setError(null);
     } catch (caught) {
@@ -876,6 +984,11 @@ export default function ModelViewer() {
       distributionVector,
       pathStart: rebarPathStart,
       pathEnd: rebarPathEnd,
+      objectLines: rebarLines.map((line) =>
+        reframeRebarLine(line, basis, null),
+      ),
+      objectPathStart: reframePoint(rebarPathStart, basis, null),
+      objectPathEnd: reframePoint(rebarPathEnd, basis, null),
       spacingInches: rebarSpacing,
       positions: distributeBars(
         0,
@@ -947,6 +1060,7 @@ export default function ModelViewer() {
     if (activeTab === "coordinates") {
       setFloorFaceId(faceId);
       setXDirectionNodeIds([]);
+      reframeRebar(basis, null);
       setBasis(null);
       setAllNodes((current) =>
         current.map((node) => ({ ...node, local: null })),
@@ -1080,6 +1194,7 @@ export default function ModelViewer() {
     if (deletingFloor) {
       setFloorFaceId(null);
       setXDirectionNodeIds([]);
+      reframeRebar(basis, null);
       setBasis(null);
       setAllNodes((current) =>
         current.map((node) => ({ ...node, local: null })),
@@ -1096,6 +1211,7 @@ export default function ModelViewer() {
     setVolumeConfirmed(false);
     setFloorFaceId(null);
     setXDirectionNodeIds([]);
+    reframeRebar(basis, null);
     setBasis(null);
     setAllNodes((current) =>
       current.map((node) => ({ ...node, local: null })),
@@ -1779,6 +1895,7 @@ export default function ModelViewer() {
               onClick={() => {
                 setFloorFaceId(null);
                 setXDirectionNodeIds([]);
+                reframeRebar(basis, null);
                 setBasis(null);
                 setAllNodes((current) =>
                   current.map((node) => ({ ...node, local: null })),

@@ -2113,7 +2113,9 @@ export default function PointCloudViewport({
         const label = createTextSprite(run.name);
         if (label) {
           const position = toThree(
-            { ...firstPoint, [run.axis]: run.start },
+            run.distributionMode === "path"
+              ? firstPoint
+              : { ...firstPoint, [run.axis]: run.start },
             displayOffset,
           );
           label.position.copy(position);
