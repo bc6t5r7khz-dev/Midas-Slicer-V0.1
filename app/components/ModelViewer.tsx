@@ -827,21 +827,13 @@ export default function ModelViewer() {
     const nextElements = elements.filter(
       (element) => !selectedElementIds.has(element.id),
     );
-    const nextSkin = buildElementSkin(nextElements, allNodes);
     setElements(nextElements);
     setSelectedElementIds(new Set());
-    if (
-      elementSkinVolume &&
-      !nextSkin.shells.some((shell) => shell.closed)
-    ) {
-      setElementSkinVolume(false);
-      setVolumeConfirmed(false);
-      setStatus(
-        "Elements deleted. The remaining element skin is open, so volume confirmation was removed.",
-      );
-    } else {
-      setStatus("Selected MCT elements deleted.");
-    }
+    setStatus(
+      elementSkinVolume
+        ? "Selected MCT elements deleted. Tolerant element volume remains active."
+        : "Selected MCT elements deleted.",
+    );
   };
 
   const confirmVolume = () => {
@@ -1194,12 +1186,13 @@ export default function ModelViewer() {
                   <small>
                     Open edges detected in{" "}
                     {elementSkin.shells.filter((shell) => !shell.closed).length}{" "}
-                    shell component(s).
+                    shell component(s). Tolerant mode can continue without
+                    repairing or deleting them.
                   </small>
                 )}
                 <button
                   className="button primary wide"
-                  disabled={!closedElementShells.length}
+                  disabled={!elementSkin.surfaces.length}
                   onClick={() => {
                     setElementSkinVolume(true);
                     setVolumeConfirmed(true);
@@ -1207,13 +1200,19 @@ export default function ModelViewer() {
                     setDefiningFaces(false);
                     setSmartSelecting(false);
                     setStatus(
-                      "Closed MCT element skin is now the inspection volume.",
+                      closedElementShells.length
+                        ? "Closed MCT element skin is now the inspection volume."
+                        : "Element volume accepted in tolerant mode. Open and interior faces will not block the workflow.",
                     );
                   }}
                 >
                   {elementSkinVolume
-                    ? "Element Skin In Use"
-                    : "Use Element Skin as Volume"}
+                    ? closedElementShells.length
+                      ? "Element Skin In Use"
+                      : "Tolerant Element Volume In Use"
+                    : closedElementShells.length
+                      ? "Use Element Skin as Volume"
+                      : "Continue with Element Volume"}
                 </button>
                 <button
                   className={`button wide ${elementEditMode ? "primary" : ""}`}
