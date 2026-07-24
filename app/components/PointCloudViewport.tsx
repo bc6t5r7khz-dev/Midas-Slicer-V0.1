@@ -56,6 +56,10 @@ type Props = {
   rebarMode: boolean;
   rebarRuns: RebarRun[];
   rebarGuideLine: RebarLine | null;
+  rebarOuterOutline: Vec3[] | null;
+  selectedRebarEdgeIndex: number | null;
+  rebarEdgeSelectionMode: boolean;
+  onPickRebarEdge: (edgeIndex: number) => void;
   pendingRebarLine: RebarLine | null;
   rebarAxis: "x" | "y" | "z";
   rebarSection: number | null;
@@ -544,6 +548,10 @@ export default function PointCloudViewport({
   rebarMode,
   rebarRuns,
   rebarGuideLine,
+  rebarOuterOutline,
+  selectedRebarEdgeIndex,
+  rebarEdgeSelectionMode,
+  onPickRebarEdge,
   pendingRebarLine,
   rebarAxis,
   rebarSection,
@@ -564,6 +572,7 @@ export default function PointCloudViewport({
   const elementMeshRef = useRef<THREE.Mesh | null>(null);
   const triangleElementIdsRef = useRef<number[]>([]);
   const rebarGuideObjectsRef = useRef<THREE.Line[]>([]);
+  const rebarEdgeObjectsRef = useRef<THREE.Line[]>([]);
   const fittedNodesRef = useRef<ModelNode[] | null>(null);
   const fittedBasisRef = useRef<LocalBasis | null>(null);
   const nodesRef = useRef(nodes);
@@ -581,6 +590,11 @@ export default function PointCloudViewport({
   const onPickElementRef = useRef(onPickElement);
   const rebarDrawingRef = useRef(rebarDrawing);
   const onPickRebarPointRef = useRef(onPickRebarPoint);
+  const rebarEdgeSelectionModeRef = useRef(rebarEdgeSelectionMode);
+  const onPickRebarEdgeRef = useRef(onPickRebarEdge);
+  const selectedRebarEdgeIndexRef = useRef(selectedRebarEdgeIndex);
+  const rebarAxisRef = useRef(rebarAxis);
+  const rebarSectionRef = useRef(rebarSection);
   const displayOffsetRef = useRef<Vec3>({ x: 0, y: 0, z: 0 });
   const toleranceRef = useRef(tolerance);
   const [renderError, setRenderError] = useState<string | null>(null);
@@ -600,6 +614,11 @@ export default function PointCloudViewport({
   onPickElementRef.current = onPickElement;
   rebarDrawingRef.current = rebarDrawing;
   onPickRebarPointRef.current = onPickRebarPoint;
+  rebarEdgeSelectionModeRef.current = rebarEdgeSelectionMode;
+  onPickRebarEdgeRef.current = onPickRebarEdge;
+  selectedRebarEdgeIndexRef.current = selectedRebarEdgeIndex;
+  rebarAxisRef.current = rebarAxis;
+  rebarSectionRef.current = rebarSection;
 
   const displayOffset = useMemo(() => {
     if (basis || !allNodes.length) return { x: 0, y: 0, z: 0 };
@@ -687,6 +706,7 @@ export default function PointCloudViewport({
         snapNodeId: number | null;
       } | null = null;
       let hoveredEdge: THREE.Line | null = null;
+      let hoveredRebarEdge: THREE.Line | null = null;
       let orbitDrag: {
         pointerId: number;
         x: number;
@@ -737,6 +757,24 @@ export default function PointCloudViewport({
           (hoveredEdge.material as THREE.LineBasicMaterial).color.setHex(
             0xffbf47,
           );
+        }
+      };
+
+      const setHoveredRebarEdge = (edge: THREE.Line | null) => {
+        if (hoveredRebarEdge === edge) return;
+        if (hoveredRebarEdge) {
+          const selected =
+            hoveredRebarEdge.userData.edgeIndex ===
+            selectedRebarEdgeIndexRef.current;
+          (
+            hoveredRebarEdge.material as THREE.LineBasicMaterial
+          ).color.setHex(selected ? 0x48d18b : 0x05090c);
+        }
+        hoveredRebarEdge = edge;
+        if (hoveredRebarEdge) {
+          (
+            hoveredRebarEdge.material as THREE.LineBasicMaterial
+          ).color.setHex(0xffbf47);
         }
       };
 
@@ -849,6 +887,19 @@ export default function PointCloudViewport({
             rebarGuideObjectsRef.current,
           )[0];
           renderer.domElement.style.cursor = guideHit ? "crosshair" : "default";
+          onHoverRef.current(null);
+          onHoverFaceRef.current(null);
+          return;
+        }
+        if (rebarEdgeSelectionModeRef.current) {
+          updatePointer(event);
+          const edgeHit = raycaster.intersectObjects(
+            rebarEdgeObjectsRef.current,
+          )[0];
+          setHoveredRebarEdge(
+            (edgeHit?.object as THREE.Line | undefined) ?? null,
+          );
+          renderer.domElement.style.cursor = edgeHit ? "pointer" : "default";
           onHoverRef.current(null);
           onHoverFaceRef.current(null);
           return;
@@ -1094,7 +1145,39 @@ export default function PointCloudViewport({
                 ? nearest.point
                 : point,
             );
+          } else if (rebarSectionRef.current !== null) {
+            const axis = rebarAxisRef.current;
+            const normal = new THREE.Vector3(
+              axis === "x" ? 1 : 0,
+              axis === "y" ? 1 : 0,
+              axis === "z" ? 1 : 0,
+            );
+            const sectionDisplay =
+              rebarSectionRef.current - displayOffsetRef.current[axis];
+            const plane = new THREE.Plane(normal, -sectionDisplay);
+            const projected = raycaster.ray.intersectPlane(
+              plane,
+              new THREE.Vector3(),
+            );
+            if (projected) {
+              onPickRebarPointRef.current({
+                x: projected.x + displayOffsetRef.current.x,
+                y: projected.y + displayOffsetRef.current.y,
+                z: projected.z + displayOffsetRef.current.z,
+              });
+            }
           }
+          return;
+        }
+
+        if (rebarEdgeSelectionModeRef.current) {
+          const hit = raycaster.intersectObjects(
+            rebarEdgeObjectsRef.current,
+          )[0];
+          const edgeIndex = hit?.object.userData.edgeIndex as
+            | number
+            | undefined;
+          if (edgeIndex !== undefined) onPickRebarEdgeRef.current(edgeIndex);
           return;
         }
 
@@ -1621,6 +1704,7 @@ export default function PointCloudViewport({
     if (!state) return;
     disposeGroup(state.rebarGroup);
     rebarGuideObjectsRef.current = [];
+    rebarEdgeObjectsRef.current = [];
     state.rebarGroup.visible = rebarMode;
     if (!rebarMode) return;
 
@@ -1671,9 +1755,41 @@ export default function PointCloudViewport({
         }
       }
     }
+    if (rebarOuterOutline?.length) {
+      rebarOuterOutline.forEach((point, edgeIndex) => {
+        const next =
+          rebarOuterOutline[(edgeIndex + 1) % rebarOuterOutline.length];
+        const edge = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([
+            toThree(point, displayOffset),
+            toThree(next, displayOffset),
+          ]),
+          new THREE.LineBasicMaterial({
+            color:
+              selectedRebarEdgeIndex === edgeIndex ? 0x48d18b : 0x05090c,
+            depthTest: false,
+          }),
+        );
+        edge.renderOrder = 20;
+        edge.userData.edgeIndex = edgeIndex;
+        state.rebarGroup.add(edge);
+        rebarEdgeObjectsRef.current.push(edge);
+      });
+    }
     if (rebarGuideLine) {
-      const guide = addPolyline(rebarGuideLine.points, 0xffbf47, 0.8, true);
+      const guide = addPolyline(rebarGuideLine.points, 0x9aa5aa, 0.9, true);
       if (guide) {
+        guide.material.dispose();
+        guide.material = new THREE.LineDashedMaterial({
+          color: 0x9aa5aa,
+          dashSize: Math.max(tolerance * 20, 0.25),
+          gapSize: Math.max(tolerance * 12, 0.15),
+          opacity: 0.9,
+          transparent: true,
+          depthTest: false,
+        });
+        guide.renderOrder = 21;
+        guide.computeLineDistances();
         guide.userData.guidePoints = rebarGuideLine.points;
         rebarGuideObjectsRef.current.push(guide);
       }
@@ -1715,10 +1831,13 @@ export default function PointCloudViewport({
     pendingRebarLine,
     rebarAxis,
     rebarGuideLine,
+    rebarOuterOutline,
     rebarMode,
     rebarRuns,
     rebarSection,
+    selectedRebarEdgeIndex,
     sliceBounds,
+    tolerance,
   ]);
 
   useEffect(() => {

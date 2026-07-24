@@ -145,6 +145,9 @@ export default function ModelViewer() {
   const [rebarLines, setRebarLines] = useState<RebarLine[]>([]);
   const [pendingRebarLine, setPendingRebarLine] =
     useState<RebarLine | null>(null);
+  const [selectedRebarEdgeIndex, setSelectedRebarEdgeIndex] = useState<
+    number | null
+  >(null);
   const [rebarSpacing, setRebarSpacing] = useState(12);
 
   const tolerance = globalBounds ? modelTolerance(globalBounds) : 1e-6;
@@ -262,6 +265,21 @@ export default function ModelViewer() {
     rebarPhase,
     rebarStart,
   ]);
+  const rebarOuterOutline = useMemo(() => {
+    if (
+      rebarPhase === "idle" ||
+      rebarPhase === "start"
+    ) {
+      return null;
+    }
+    const points = createCoverOutline(
+      allNodes,
+      rebarAxis,
+      rebarStart,
+      0,
+    );
+    return points.length >= 3 ? points : null;
+  }, [allNodes, rebarAxis, rebarPhase, rebarStart]);
 
   const resetWorkflow = useCallback((nodes: ModelNode[], bounds: Bounds, nextElements: ModelElement[] = []) => {
     setAllNodes(nodes);
@@ -764,6 +782,7 @@ export default function ModelViewer() {
     setRebarPhase("idle");
     setRebarLines([]);
     setPendingRebarLine(null);
+    setSelectedRebarEdgeIndex(null);
     setRebarName(`Bar Run ${rebarRuns.length + 2}`);
     setStatus(`${run.name} created with ${run.positions.length} bars.`);
   };
@@ -1739,6 +1758,7 @@ export default function ModelViewer() {
                       setRebarStart(currentBounds.x[0]);
                       setRebarEnd(currentBounds.x[1]);
                       setRebarLines([]);
+                      setSelectedRebarEdgeIndex(null);
                       setStatus("Choose the start section axis and location.");
                     }}
                   >
@@ -1758,6 +1778,7 @@ export default function ModelViewer() {
                             setRebarAxis(axis);
                             setRebarStart(currentBounds[axis][0]);
                             setRebarEnd(currentBounds[axis][1]);
+                            setSelectedRebarEdgeIndex(null);
                           }}
                         >
                           {axis.toUpperCase()}
@@ -1814,7 +1835,10 @@ export default function ModelViewer() {
                     />
                     <button
                       className="button primary wide"
-                      onClick={() => setRebarPhase("lines")}
+                      onClick={() => {
+                        setSelectedRebarEdgeIndex(null);
+                        setRebarPhase("lines");
+                      }}
                     >
                       Confirm Section
                     </button>
@@ -1825,13 +1849,22 @@ export default function ModelViewer() {
                   <section className="rebar-step">
                     <span className="eyebrow">BAR SHAPE</span>
                     <div className="selection-callout">
-                      <strong>Outer edge selected</strong>
-                      <span>Gold guide = 2″ clear cover.</span>
+                      <strong>
+                        {selectedRebarEdgeIndex === null
+                          ? "Select an outer edge"
+                          : `Edge ${selectedRebarEdgeIndex + 1} selected`}
+                      </strong>
+                      <span>
+                        Hover turns gold · selected edge stays green.
+                      </span>
                     </div>
                     {!pendingRebarLine ? (
                       <button
                         className="button wide"
-                        disabled={!rebarGuideLine}
+                        disabled={
+                          !rebarGuideLine ||
+                          selectedRebarEdgeIndex === null
+                        }
                         onClick={() =>
                           setPendingRebarLine({
                             id: `line-${crypto.randomUUID()}`,
@@ -2068,7 +2101,15 @@ export default function ModelViewer() {
           sliceBounds={currentBounds}
           rebarMode={activeTab === "rebar"}
           rebarRuns={rebarRuns}
-          rebarGuideLine={rebarGuideLine}
+          rebarGuideLine={pendingRebarLine ? rebarGuideLine : null}
+          rebarOuterOutline={rebarOuterOutline}
+          selectedRebarEdgeIndex={selectedRebarEdgeIndex}
+          rebarEdgeSelectionMode={
+            activeTab === "rebar" &&
+            rebarPhase === "lines" &&
+            !pendingRebarLine
+          }
+          onPickRebarEdge={setSelectedRebarEdgeIndex}
           pendingRebarLine={pendingRebarLine}
           rebarAxis={rebarAxis}
           rebarSection={
