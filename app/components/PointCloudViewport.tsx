@@ -1957,6 +1957,61 @@ export default function PointCloudViewport({
       return line;
     };
 
+    const addRodMeshes = (
+      segments: Array<[Vec3, Vec3]>,
+      joints: Vec3[],
+      color: number,
+      alwaysVisible = false,
+    ) => {
+      if (!segments.length || !inchesPerModelUnit) return;
+      const radius = 0.5 / inchesPerModelUnit;
+      const rodMaterial = new THREE.MeshBasicMaterial({
+        color,
+        depthTest: !alwaysVisible,
+        depthWrite: !alwaysVisible,
+      });
+      const rods = new THREE.InstancedMesh(
+        new THREE.CylinderGeometry(radius, radius, 1, 12),
+        rodMaterial,
+        segments.length,
+      );
+      const up = new THREE.Vector3(0, 1, 0);
+      const matrix = new THREE.Matrix4();
+      const quaternion = new THREE.Quaternion();
+      const scale = new THREE.Vector3();
+      segments.forEach(([start, end], index) => {
+        const first = toThree(start, displayOffset);
+        const second = toThree(end, displayOffset);
+        const direction = second.clone().sub(first);
+        const length = direction.length();
+        quaternion.setFromUnitVectors(up, direction.normalize());
+        scale.set(1, length, 1);
+        matrix.compose(
+          first.clone().add(second).multiplyScalar(0.5),
+          quaternion,
+          scale,
+        );
+        rods.setMatrixAt(index, matrix);
+      });
+      rods.instanceMatrix.needsUpdate = true;
+      rods.renderOrder = alwaysVisible ? 30 : 5;
+      state.rebarGroup.add(rods);
+
+      const jointMeshes = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(radius, 12, 8),
+        rodMaterial.clone(),
+        joints.length,
+      );
+      joints.forEach((point, index) => {
+        const translated = toThree(point, displayOffset);
+        matrix.makeTranslation(translated.x, translated.y, translated.z);
+        jointMeshes.setMatrixAt(index, matrix);
+      });
+      jointMeshes.instanceMatrix.needsUpdate = true;
+      jointMeshes.renderOrder = alwaysVisible ? 30 : 5;
+      state.rebarGroup.add(jointMeshes);
+    };
+
     const rodSegments: Array<[Vec3, Vec3]> = [];
     const rodJoints: Vec3[] = [];
     for (const run of rebarRuns) {
@@ -2001,57 +2056,23 @@ export default function PointCloudViewport({
         }
       }
     }
-    if (rodSegments.length && inchesPerModelUnit) {
-      const radius = 0.5 / inchesPerModelUnit;
-      const cylinderGeometry = new THREE.CylinderGeometry(
-        radius,
-        radius,
-        1,
-        12,
-      );
-      const rodMaterial = new THREE.MeshBasicMaterial({
-        color: 0xd73b32,
-      });
-      const rods = new THREE.InstancedMesh(
-        cylinderGeometry,
-        rodMaterial,
-        rodSegments.length,
-      );
-      const up = new THREE.Vector3(0, 1, 0);
-      const matrix = new THREE.Matrix4();
-      const quaternion = new THREE.Quaternion();
-      const scale = new THREE.Vector3();
-      rodSegments.forEach(([start, end], index) => {
-        const first = toThree(start, displayOffset);
-        const second = toThree(end, displayOffset);
-        const direction = second.clone().sub(first);
-        const length = direction.length();
-        quaternion.setFromUnitVectors(up, direction.normalize());
-        scale.set(1, length, 1);
-        matrix.compose(
-          first.clone().add(second).multiplyScalar(0.5),
-          quaternion,
-          scale,
-        );
-        rods.setMatrixAt(index, matrix);
-      });
-      rods.instanceMatrix.needsUpdate = true;
-      state.rebarGroup.add(rods);
+    addRodMeshes(rodSegments, rodJoints, 0x8f1717);
 
-      const jointGeometry = new THREE.SphereGeometry(radius, 12, 8);
-      const joints = new THREE.InstancedMesh(
-        jointGeometry,
-        rodMaterial.clone(),
-        rodJoints.length,
-      );
-      rodJoints.forEach((point, index) => {
-        const translated = toThree(point, displayOffset);
-        matrix.makeTranslation(translated.x, translated.y, translated.z);
-        joints.setMatrixAt(index, matrix);
-      });
-      joints.instanceMatrix.needsUpdate = true;
-      state.rebarGroup.add(joints);
+    const draftSegments: Array<[Vec3, Vec3]> = [];
+    const draftJoints: Vec3[] = [];
+    for (const line of draftRebarLines) {
+      draftJoints.push(...line.points);
+      for (let index = 0; index < line.points.length - 1; index += 1) {
+        draftSegments.push([line.points[index], line.points[index + 1]]);
+      }
+      if (line.closed && line.points.length > 2) {
+        draftSegments.push([
+          line.points[line.points.length - 1],
+          line.points[0],
+        ]);
+      }
     }
+    addRodMeshes(draftSegments, draftJoints, 0xf04b43, true);
     if (rebarOuterEdges?.length) {
       rebarOuterEdges.forEach(([point, next], edgeIndex) => {
         const geometry = new LineSegmentsGeometry();
@@ -2128,9 +2149,6 @@ export default function PointCloudViewport({
     }
     if (pendingRebarLine) {
       addPolyline(pendingRebarLine.points, 0xff8a2a, 1, false);
-    }
-    for (const line of draftRebarLines) {
-      addPolyline(line.points, 0xd73b32, 1, line.closed ?? false);
     }
     if (rebarPathStart && rebarPathEnd) {
       const path = addPolyline(
