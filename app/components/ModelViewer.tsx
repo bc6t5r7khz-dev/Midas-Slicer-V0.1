@@ -79,6 +79,10 @@ export default function ModelViewer() {
   const [elements, setElements] = useState<ModelElement[]>([]);
   const [showElementSkin, setShowElementSkin] = useState(true);
   const [elementSkinVolume, setElementSkinVolume] = useState(false);
+  const [elementEditMode, setElementEditMode] = useState(false);
+  const [selectedElementIds, setSelectedElementIds] = useState<Set<number>>(
+    new Set(),
+  );
   const [fileName, setFileName] = useState("Demo bridge lattice");
   const [globalBounds, setGlobalBounds] = useState<Bounds | null>(null);
   const [activeTab, setActiveTab] = useState<WorkflowTab>("volume");
@@ -214,6 +218,8 @@ export default function ModelViewer() {
     setElements(nextElements);
     setShowElementSkin(nextElements.length > 0);
     setElementSkinVolume(false);
+    setElementEditMode(false);
+    setSelectedElementIds(new Set());
     setGlobalBounds(bounds);
     setFaces([]);
     setDefiningFaces(false);
@@ -807,6 +813,37 @@ export default function ModelViewer() {
     setStatus("All faces removed.");
   };
 
+  const toggleElementSelection = (elementId: number) => {
+    setSelectedElementIds((current) => {
+      const next = new Set(current);
+      if (next.has(elementId)) next.delete(elementId);
+      else next.add(elementId);
+      return next;
+    });
+  };
+
+  const deleteSelectedElements = () => {
+    if (!selectedElementIds.size) return;
+    const nextElements = elements.filter(
+      (element) => !selectedElementIds.has(element.id),
+    );
+    const nextSkin = buildElementSkin(nextElements, allNodes);
+    setElements(nextElements);
+    setSelectedElementIds(new Set());
+    if (
+      elementSkinVolume &&
+      !nextSkin.shells.some((shell) => shell.closed)
+    ) {
+      setElementSkinVolume(false);
+      setVolumeConfirmed(false);
+      setStatus(
+        "Elements deleted. The remaining element skin is open, so volume confirmation was removed.",
+      );
+    } else {
+      setStatus("Selected MCT elements deleted.");
+    }
+  };
+
   const confirmVolume = () => {
     const polyhedron = automaticVolume
       ? true
@@ -1024,7 +1061,9 @@ export default function ModelViewer() {
               ? `Click to add local ${smartAxis.toUpperCase()} plane · Arrow keys change axis`
               : "Click to add the highlighted face"
             : "Hover a node to preview this method"
-          : "Begin, Smart Select, or Auto-Define"
+          : elementEditMode
+            ? "Click a plate to select its whole MCT element"
+            : "Begin, Smart Select, or Auto-Define"
       : activeTab === "coordinates"
         ? !floorFaceId
           ? "Select the floor face"
@@ -1109,6 +1148,8 @@ export default function ModelViewer() {
                 setActiveTab(tab.id);
                 setDefiningFaces(false);
                 setSmartSelecting(false);
+                setElementEditMode(false);
+                setSelectedElementIds(new Set());
                 setDraftNodeIds([]);
               }}
             >
@@ -1174,6 +1215,43 @@ export default function ModelViewer() {
                     ? "Element Skin In Use"
                     : "Use Element Skin as Volume"}
                 </button>
+                <button
+                  className={`button wide ${elementEditMode ? "primary" : ""}`}
+                  disabled={!elementSkin.plateElementCount}
+                  onClick={() => {
+                    setElementEditMode((value) => !value);
+                    setSelectedElementIds(new Set());
+                    setShowElementSkin(true);
+                    setDefiningFaces(false);
+                    setSmartSelecting(false);
+                    setStatus(
+                      elementEditMode
+                        ? "Element editing ended."
+                        : "Plate element editing active. Click unwanted planes.",
+                    );
+                  }}
+                >
+                  {elementEditMode ? "Finish Element Editing" : "Delete Elements"}
+                </button>
+                {elementEditMode && (
+                  <div className="selection-callout">
+                    <strong>
+                      {selectedElementIds.size} element
+                      {selectedElementIds.size === 1 ? "" : "s"} selected
+                    </strong>
+                    <span>
+                      Only plate elements are shown. Click a face to toggle its
+                      whole MCT element.
+                    </span>
+                    <button
+                      className="danger-button"
+                      disabled={!selectedElementIds.size}
+                      onClick={deleteSelectedElements}
+                    >
+                      Delete Selected Elements
+                    </button>
+                  </div>
+                )}
               </section>
             )}
 
@@ -1519,6 +1597,9 @@ export default function ModelViewer() {
           tolerance={tolerance}
           elementSurfaces={elementSkin.surfaces}
           showElementSkin={showElementSkin}
+          elementEditMode={elementEditMode}
+          selectedElementIds={[...selectedElementIds]}
+          onPickElement={toggleElementSelection}
           onHover={setHover}
           onHoverFace={setHoveredFaceId}
           onPickNode={handleNodePick}

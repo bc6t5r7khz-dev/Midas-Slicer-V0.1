@@ -40,6 +40,9 @@ type Props = {
   tolerance: number;
   elementSurfaces: ElementSurface[];
   showElementSkin: boolean;
+  elementEditMode: boolean;
+  selectedElementIds: number[];
+  onPickElement: (elementId: number) => void;
   onHover: (payload: {
     node: ModelNode;
     clientX: number;
@@ -219,6 +222,9 @@ export default function PointCloudViewport({
   tolerance,
   elementSurfaces,
   showElementSkin,
+  elementEditMode,
+  selectedElementIds,
+  onPickElement,
   onHover,
   onHoverFace,
   onPickNode,
@@ -230,6 +236,8 @@ export default function PointCloudViewport({
   const sceneRef = useRef<SceneState | null>(null);
   const faceMeshesRef = useRef<THREE.Mesh[]>([]);
   const faceEdgesRef = useRef<THREE.Line[]>([]);
+  const elementMeshRef = useRef<THREE.Mesh | null>(null);
+  const triangleElementIdsRef = useRef<number[]>([]);
   const fittedNodesRef = useRef<ModelNode[] | null>(null);
   const fittedBasisRef = useRef<LocalBasis | null>(null);
   const nodesRef = useRef(nodes);
@@ -243,6 +251,8 @@ export default function PointCloudViewport({
   const onPickFaceRef = useRef(onPickFace);
   const onRemoveFaceVertexRef = useRef(onRemoveFaceVertex);
   const onInsertFaceVertexRef = useRef(onInsertFaceVertex);
+  const elementEditModeRef = useRef(elementEditMode);
+  const onPickElementRef = useRef(onPickElement);
   const displayOffsetRef = useRef<Vec3>({ x: 0, y: 0, z: 0 });
   const toleranceRef = useRef(tolerance);
   const [renderError, setRenderError] = useState<string | null>(null);
@@ -258,6 +268,8 @@ export default function PointCloudViewport({
   onPickFaceRef.current = onPickFace;
   onRemoveFaceVertexRef.current = onRemoveFaceVertex;
   onInsertFaceVertexRef.current = onInsertFaceVertex;
+  elementEditModeRef.current = elementEditMode;
+  onPickElementRef.current = onPickElement;
 
   const displayOffset = useMemo(() => {
     if (basis || !allNodes.length) return { x: 0, y: 0, z: 0 };
@@ -498,6 +510,16 @@ export default function PointCloudViewport({
           onHoverFaceRef.current(null);
           return;
         }
+        if (elementEditModeRef.current) {
+          updatePointer(event);
+          const elementHit = elementMeshRef.current
+            ? raycaster.intersectObject(elementMeshRef.current)[0]
+            : undefined;
+          renderer.domElement.style.cursor = elementHit ? "pointer" : "crosshair";
+          onHoverRef.current(null);
+          onHoverFaceRef.current(null);
+          return;
+        }
         const hit = getNodeHit(event);
         updatePointer(event);
         const faceHit = raycaster.intersectObjects(faceMeshesRef.current)[0];
@@ -698,6 +720,18 @@ export default function PointCloudViewport({
           return;
         }
         updatePointer(event);
+
+        if (elementEditModeRef.current) {
+          const hit = elementMeshRef.current
+            ? raycaster.intersectObject(elementMeshRef.current)[0]
+            : undefined;
+          const elementId =
+            hit?.faceIndex === undefined
+              ? undefined
+              : triangleElementIdsRef.current[hit.faceIndex];
+          if (elementId !== undefined) onPickElementRef.current(elementId);
+          return;
+        }
 
         if (pickTargetRef.current === "face") {
           const faceHit = raycaster.intersectObjects(faceMeshesRef.current)[0];
@@ -905,19 +939,32 @@ export default function PointCloudViewport({
     const state = sceneRef.current;
     if (!state) return;
     disposeGroup(state.elementGroup);
+    elementMeshRef.current = null;
+    triangleElementIdsRef.current = [];
     state.elementGroup.visible = showElementSkin;
     if (!showElementSkin || !elementSurfaces.length) return;
 
     const toDisplay = (point: Vec3) => (basis ? toLocal(point, basis) : point);
     const trianglePositions: number[] = [];
+    const triangleColors: number[] = [];
     const edgePositions: number[] = [];
-    for (const surface of elementSurfaces) {
+    const visibleSurfaces = elementEditMode
+      ? elementSurfaces.filter((surface) => surface.source === "plate")
+      : elementSurfaces;
+    const normalColor = new THREE.Color(elementEditMode ? 0xffbf47 : 0x91afba);
+    const selectedColor = new THREE.Color(0xff4d62);
+    for (const surface of visibleSurfaces) {
       const vertices = surface.vertices.map(toDisplay);
       for (let index = 1; index < vertices.length - 1; index += 1) {
+        const color = selectedElementIds.includes(surface.elementId)
+          ? selectedColor
+          : normalColor;
         [vertices[0], vertices[index], vertices[index + 1]].forEach((vertex) => {
           const point = toThree(vertex, displayOffset);
           trianglePositions.push(point.x, point.y, point.z);
+          triangleColors.push(color.r, color.g, color.b);
         });
+        triangleElementIdsRef.current.push(surface.elementId);
       }
       vertices.forEach((vertex, index) => {
         const next = vertices[(index + 1) % vertices.length];
@@ -932,19 +979,23 @@ export default function PointCloudViewport({
       "position",
       new THREE.Float32BufferAttribute(trianglePositions, 3),
     );
+    meshGeometry.setAttribute(
+      "color",
+      new THREE.Float32BufferAttribute(triangleColors, 3),
+    );
     meshGeometry.computeVertexNormals();
-    state.elementGroup.add(
-      new THREE.Mesh(
+    const elementMesh = new THREE.Mesh(
         meshGeometry,
         new THREE.MeshBasicMaterial({
-          color: 0x91afba,
-          opacity: volumeConfirmed ? 0.18 : 0.1,
+          vertexColors: true,
+          opacity: elementEditMode ? 0.42 : volumeConfirmed ? 0.18 : 0.1,
           transparent: true,
           depthWrite: false,
           side: THREE.DoubleSide,
         }),
-      ),
-    );
+      );
+    elementMeshRef.current = elementMesh;
+    state.elementGroup.add(elementMesh);
 
     const edgeGeometry = new THREE.BufferGeometry();
     edgeGeometry.setAttribute(
@@ -967,6 +1018,8 @@ export default function PointCloudViewport({
     displayOffset.y,
     displayOffset.z,
     elementSurfaces,
+    elementEditMode,
+    selectedElementIds,
     showElementSkin,
     volumeConfirmed,
   ]);
