@@ -805,6 +805,17 @@ export default function ModelViewer() {
     setStatus("Closed inspection volume confirmed.");
   };
 
+  const undoVolumeConfirmation = () => {
+    setVolumeConfirmed(false);
+    setConfirmWarning(false);
+    setActiveTab("volume");
+    setDefiningFaces(false);
+    setSmartSelecting(false);
+    setDraftNodeIds([]);
+    setFittedFaceConfirmation(null);
+    setStatus("Volume confirmation undone. Faces are ready for editing.");
+  };
+
   const autoDefine = () => {
     if (!globalBounds) return;
     try {
@@ -1257,11 +1268,19 @@ export default function ModelViewer() {
             <div className="volume-actions">
               <button
                 className="button primary wide"
-                disabled={faces.length < 4}
+                disabled={faces.length < 4 || volumeConfirmed}
                 onClick={confirmVolume}
               >
                 {volumeConfirmed ? "Volume Confirmed" : "Confirm Volume"}
               </button>
+              {volumeConfirmed && (
+                <button
+                  className="button wide undo-volume"
+                  onClick={undoVolumeConfirmation}
+                >
+                  Undo Volume Confirmation
+                </button>
+              )}
               <button className="danger-button" onClick={removeAllFaces}>
                 Remove All Faces
               </button>

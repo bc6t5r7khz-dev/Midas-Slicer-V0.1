@@ -435,6 +435,10 @@ button {
   padding: 17px 22px 12px;
 }
 
+.undo-volume {
+  margin-top: 9px;
+}
+
 .danger-button {
   display: block;
   margin: 12px auto 0;
