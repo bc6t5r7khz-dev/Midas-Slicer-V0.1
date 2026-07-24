@@ -342,8 +342,7 @@ function clippedSolidBuffers(
   );
   const epsilon = span * 1e-8;
   const positions: number[] = [];
-  const thinEdges: number[] = [];
-  const cutEdges: number[] = [];
+  const capPositions: number[] = [];
 
   for (const element of elements) {
     if (element.type !== "SOLID") continue;
@@ -370,17 +369,83 @@ function clippedSolidBuffers(
       }));
       for (let index = 1; index < displayed.length - 1; index += 1) {
         [displayed[0], displayed[index], displayed[index + 1]].forEach(
-          (point) => positions.push(point.x, point.y, point.z),
+          (point) => {
+            positions.push(point.x, point.y, point.z);
+            if (face.cap) capPositions.push(point.x, point.y, point.z);
+          },
         );
       }
-      displayed.forEach((point, index) => {
-        const next = displayed[(index + 1) % displayed.length];
-        const target = face.cap ? cutEdges : thinEdges;
-        target.push(point.x, point.y, point.z, next.x, next.y, next.z);
-      });
     }
   }
-  return { positions, thinEdges, cutEdges };
+  return { positions, capPositions };
+}
+
+function clipSurfacePolygon(
+  vertices: Vec3[],
+  plane: ClipPlane,
+  epsilon: number,
+) {
+  const clipped: Vec3[] = [];
+  for (
+    let currentIndex = 0, previousIndex = vertices.length - 1;
+    currentIndex < vertices.length;
+    previousIndex = currentIndex, currentIndex += 1
+  ) {
+    const previous = vertices[previousIndex];
+    const current = vertices[currentIndex];
+    const previousDistance = planeDistance(plane, previous);
+    const currentDistance = planeDistance(plane, current);
+    const previousInside = previousDistance >= -epsilon;
+    const currentInside = currentDistance >= -epsilon;
+    if (previousInside !== currentInside) {
+      const amount =
+        previousDistance / (previousDistance - currentDistance);
+      clipped.push({
+        x: previous.x + (current.x - previous.x) * amount,
+        y: previous.y + (current.y - previous.y) * amount,
+        z: previous.z + (current.z - previous.z) * amount,
+      });
+    }
+    if (currentInside) clipped.push(current);
+  }
+  return clipped;
+}
+
+function clippedExteriorPositions(
+  surfaces: ElementSurface[],
+  basis: LocalBasis | null,
+  slice: SliceRanges,
+  offset: Vec3,
+) {
+  const planes: ClipPlane[] = [
+    { normal: { x: 1, y: 0, z: 0 }, constant: -slice.x[0] },
+    { normal: { x: -1, y: 0, z: 0 }, constant: slice.x[1] },
+    { normal: { x: 0, y: 1, z: 0 }, constant: -slice.y[0] },
+    { normal: { x: 0, y: -1, z: 0 }, constant: slice.y[1] },
+    { normal: { x: 0, y: 0, z: 1 }, constant: -slice.z[0] },
+    { normal: { x: 0, y: 0, z: -1 }, constant: slice.z[1] },
+  ];
+  const positions: number[] = [];
+  for (const surface of surfaces) {
+    let vertices = surface.vertices.map((vertex) =>
+      basis ? toLocal(vertex, basis) : vertex,
+    );
+    for (const plane of planes) {
+      vertices = clipSurfacePolygon(vertices, plane, 1e-8);
+      if (vertices.length < 3) break;
+    }
+    for (let index = 1; index < vertices.length - 1; index += 1) {
+      [vertices[0], vertices[index], vertices[index + 1]].forEach(
+        (vertex) =>
+          positions.push(
+            vertex.x - offset.x,
+            vertex.y - offset.y,
+            vertex.z - offset.z,
+          ),
+      );
+    }
+  }
+  return positions;
 }
 
 function fitCamera(
@@ -1196,27 +1261,50 @@ export default function PointCloudViewport({
       );
       state.elementGroup.add(mesh);
 
-      if (buffers.thinEdges.length) {
-        const thinGeometry = new THREE.BufferGeometry();
-        thinGeometry.setAttribute(
-          "position",
-          new THREE.Float32BufferAttribute(buffers.thinEdges, 3),
-        );
+      const exteriorGeometry = new THREE.BufferGeometry();
+      exteriorGeometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(
+          clippedExteriorPositions(
+            elementSurfaces,
+            basis,
+            slice,
+            displayOffset,
+          ),
+          3,
+        ),
+      );
+      const featureGeometry = new THREE.EdgesGeometry(exteriorGeometry, 25);
+      exteriorGeometry.dispose();
+      if (featureGeometry.getAttribute("position").count) {
         state.elementGroup.add(
           new THREE.LineSegments(
-            thinGeometry,
+            featureGeometry,
             new THREE.LineBasicMaterial({
               color: 0x05090c,
-              opacity: 0.72,
+              opacity: 0.82,
               transparent: true,
             }),
           ),
         );
+      } else {
+        featureGeometry.dispose();
       }
 
-      if (buffers.cutEdges.length) {
+      if (buffers.capPositions.length) {
+        const capGeometry = new THREE.BufferGeometry();
+        capGeometry.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(buffers.capPositions, 3),
+        );
+        const capOutline = new THREE.EdgesGeometry(capGeometry, 25);
+        capGeometry.dispose();
+        const outlineAttribute = capOutline.getAttribute("position");
         const cutGeometry = new LineSegmentsGeometry();
-        cutGeometry.setPositions(buffers.cutEdges);
+        cutGeometry.setPositions(
+          Array.from(outlineAttribute.array as ArrayLike<number>),
+        );
+        capOutline.dispose();
         const cutMaterial = new LineMaterial({
           color: 0x05090c,
           linewidth: 3,
