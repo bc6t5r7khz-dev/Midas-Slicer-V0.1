@@ -390,6 +390,10 @@ export default function PointCloudViewport({
       const getSnapNode = (faceId: string, event: PointerEvent) => {
         const face = facesRef.current.find((candidate) => candidate.id === faceId);
         if (!face) return null;
+        const faceTolerance = Math.max(
+          toleranceRef.current * 2,
+          (face.fitDeviation ?? 0) * 1.25,
+        );
         const rect = renderer.domElement.getBoundingClientRect();
         let closest:
           | { node: ModelNode; point: THREE.Vector3; distance: number }
@@ -402,7 +406,7 @@ export default function PointCloudViewport({
               face.plane.normal.z * node.global.z +
               face.plane.constant,
           );
-          if (planeDistance > toleranceRef.current * 2) continue;
+          if (planeDistance > faceTolerance) continue;
           const value = node.local ?? node.global;
           const point = toThree(value, displayOffsetRef.current);
           const projected = point.clone().project(camera);

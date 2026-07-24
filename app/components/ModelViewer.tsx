@@ -35,6 +35,7 @@ import {
   buildPolyhedron,
   centroid,
   createFace,
+  createFittedFace,
   isInsidePlanes,
   isPointOnFaceBoundary,
   isPointWithinFace,
@@ -84,6 +85,9 @@ export default function ModelViewer() {
   >("classic");
   const [smartAxis, setSmartAxis] = useState<SmartAxis>("x");
   const [draftNodeIds, setDraftNodeIds] = useState<number[]>([]);
+  const [fittedFaceConfirmation, setFittedFaceConfirmation] = useState<
+    string | null
+  >(null);
   const [selectedFaceIds, setSelectedFaceIds] = useState<Set<string>>(
     new Set(),
   );
@@ -136,11 +140,21 @@ export default function ModelViewer() {
       let onFaceEdge = false;
       let onEditingFace = false;
       for (const face of faces) {
-        if (isPointWithinFace(node.global, face, tolerance)) {
+        const faceTolerance = Math.max(
+          tolerance,
+          (face.fitDeviation ?? 0) * 1.1,
+        );
+        if (
+          face.id === shapeEditingFaceId &&
+          face.nodeIds.includes(node.id)
+        ) {
+          onEditingFace = true;
+        }
+        if (isPointWithinFace(node.global, face, faceTolerance)) {
           onFace = true;
           if (face.id === shapeEditingFaceId) onEditingFace = true;
         }
-        if (isPointOnFaceBoundary(node.global, face, tolerance)) {
+        if (isPointOnFaceBoundary(node.global, face, faceTolerance)) {
           onFaceEdge = true;
         }
       }
@@ -189,6 +203,7 @@ export default function ModelViewer() {
     setDefiningFaces(false);
     setSmartSelecting(false);
     setDraftNodeIds([]);
+    setFittedFaceConfirmation(null);
     setSelectedFaceIds(new Set());
     setVolumeConfirmed(false);
     setConfirmWarning(false);
@@ -350,24 +365,58 @@ export default function ModelViewer() {
         return { id, point: node.global };
       });
       const nextNumber = faces.length + 1;
-      const face = createFace(
-        `face-${crypto.randomUUID()}`,
-        `Face ${nextNumber}`,
-        selected,
-        centroid(allNodes.map((node) => node.global)),
-        tolerance,
-      );
+      const id = `face-${crypto.randomUUID()}`;
+      const label = `Face ${nextNumber}`;
+      const cloudCenter = centroid(allNodes.map((node) => node.global));
+      const signature = draftNodeIds.join(",");
+      let face: VolumeFace;
+      try {
+        face = createFace(
+          id,
+          label,
+          selected,
+          cloudCenter,
+          tolerance,
+        );
+      } catch (caught) {
+        const message =
+          caught instanceof Error ? caught.message : "Could not create face.";
+        if (!message.includes("not coplanar")) throw caught;
+        if (fittedFaceConfirmation !== signature) {
+          setFittedFaceConfirmation(signature);
+          setError(
+            "These boundary nodes are not coplanar. Press Space again to fit and accept this face.",
+          );
+          setStatus(
+            "Non-coplanar boundary detected · Space again accepts a fitted plane.",
+          );
+          return;
+        }
+        face = createFittedFace(id, label, selected, cloudCenter);
+      }
       setFaces((current) => [...current, face]);
       setDraftNodeIds([]);
+      setFittedFaceConfirmation(null);
       setVolumeConfirmed(false);
-      setStatus(`${face.label} created. Select the next face.`);
+      setStatus(
+        face.fitted
+          ? `${face.label} fitted through the selected nodes. It will knit to adjacent planes when confirmed.`
+          : `${face.label} created. Select the next face.`,
+      );
       setError(null);
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "Could not create face.",
       );
     }
-  }, [allNodes, draftNodeIds, faces.length, globalBounds, tolerance]);
+  }, [
+    allNodes,
+    draftNodeIds,
+    faces.length,
+    fittedFaceConfirmation,
+    globalBounds,
+    tolerance,
+  ]);
 
   const removeLastFace = useCallback(() => {
     const removed = faces.at(-1);
@@ -400,17 +449,15 @@ export default function ModelViewer() {
       ) {
         return;
       }
-      if (
-        event.code === "Space" &&
-        definingFaces
-      ) {
+      if (event.code === "Space" && definingFaces) {
         event.preventDefault();
-        commitDraftFace();
+        if (!event.repeat) commitDraftFace();
       }
       if (event.code === "Backspace") {
         event.preventDefault();
         if (draftNodeIds.length) {
           setDraftNodeIds((current) => current.slice(0, -1));
+          setFittedFaceConfirmation(null);
           setStatus("Last selected point removed.");
         } else if (!event.repeat) {
           removeLastFace();
@@ -421,6 +468,7 @@ export default function ModelViewer() {
         definingFaces
       ) {
         setDraftNodeIds([]);
+        setFittedFaceConfirmation(null);
         setStatus("Current face selection cleared.");
       }
     };
@@ -542,6 +590,7 @@ export default function ModelViewer() {
     }
 
     if (activeTab === "volume" && definingFaces) {
+      setFittedFaceConfirmation(null);
       setDraftNodeIds((current) => {
         if (current.includes(nodeId)) {
           setError(
@@ -619,13 +668,21 @@ export default function ModelViewer() {
           if (!node) throw new Error(`Node ${id} is no longer available.`);
           return { id, point: node.global };
         });
-        const replacement = createFace(
-          original.id,
-          original.label,
-          selected,
-          centroid(allNodes.map((node) => node.global)),
-          tolerance,
-        );
+        const cloudCenter = centroid(allNodes.map((node) => node.global));
+        const replacement = original.fitted
+          ? createFittedFace(
+              original.id,
+              original.label,
+              selected,
+              cloudCenter,
+            )
+          : createFace(
+              original.id,
+              original.label,
+              selected,
+              cloudCenter,
+              tolerance,
+            );
         replacement.automatic = original.automatic;
         replacement.smart = original.smart;
         setFaces((current) =>
@@ -672,7 +729,11 @@ export default function ModelViewer() {
           face.plane.normal.z * node.global.z +
           face.plane.constant,
       );
-      if (distance > tolerance) {
+      const editTolerance = Math.max(
+        tolerance,
+        (face.fitDeviation ?? 0) * 1.25,
+      );
+      if (distance > editTolerance) {
         setError("The new vertex must be on the face plane.");
         return;
       }
@@ -1094,9 +1155,11 @@ export default function ModelViewer() {
                 <strong>{draftNodeIds.length} selected</strong>
                 <span>
                   {invalidDraftNodeIds.length
-                    ? `${invalidDraftNodeIds.length} red point${
-                        invalidDraftNodeIds.length === 1 ? " is" : "s are"
-                      } off the face plane`
+                    ? fittedFaceConfirmation === draftNodeIds.join(",")
+                      ? "Press Space again to accept the fitted plane"
+                      : `${invalidDraftNodeIds.length} red point${
+                          invalidDraftNodeIds.length === 1 ? " is" : "s are"
+                        } off-plane · Space reviews`
                     : draftNodeIds.length >= 3
                     ? "Press Space to close and create the face"
                     : `Trace ${3 - draftNodeIds.length} more point${
@@ -1171,7 +1234,9 @@ export default function ModelViewer() {
                             ? `${face.nodeIds.length} MCT boundary nodes`
                             : face.smart
                               ? `Smart plane · ${face.nodeIds.length} boundary nodes`
-                            : `${face.nodeIds.length} nodes`}
+                              : face.fitted
+                                ? `Fitted plane · ${face.nodeIds.length} source nodes`
+                                : `${face.nodeIds.length} nodes`}
                         </small>
                       </span>
                     </label>

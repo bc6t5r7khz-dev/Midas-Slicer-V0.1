@@ -31,6 +31,8 @@ export type VolumeFace = {
   plane: PlaneDefinition;
   automatic?: boolean;
   smart?: boolean;
+  fitted?: boolean;
+  fitDeviation?: number;
 };
 
 export type Polyhedron = {

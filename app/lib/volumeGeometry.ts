@@ -258,6 +258,52 @@ export function createFace(
 }
 
 /**
+ * Accepts a slightly warped ordered boundary by fitting one plane through its
+ * centroid, then projecting the display polygon onto that plane. The original
+ * node IDs remain attached to the face.
+ */
+export function createFittedFace(
+  id: string,
+  label: string,
+  nodes: Array<{ id: number; point: Vec3 }>,
+  cloudCenter: Vec3,
+): VolumeFace {
+  if (nodes.length < 3) {
+    throw new Error("A face needs at least three nodes.");
+  }
+  const sourcePoints = nodes.map((node) => node.point);
+  let normal = polygonNormal(sourcePoints);
+  const faceCenter = centroid(sourcePoints);
+  let constant = -dot(normal, faceCenter);
+  let fitDeviation = 0;
+  for (const point of sourcePoints) {
+    fitDeviation = Math.max(
+      fitDeviation,
+      Math.abs(dot(normal, point) + constant),
+    );
+  }
+  const vertices = sourcePoints.map((point) => {
+    const distance = dot(normal, point) + constant;
+    return subtract(point, scale(normal, distance));
+  });
+  validateOrderedBoundary(vertices, normal);
+
+  if (dot(normal, cloudCenter) + constant > 0) {
+    normal = scale(normal, -1);
+    constant *= -1;
+  }
+  return {
+    id,
+    label,
+    nodeIds: nodes.map((node) => node.id),
+    vertices,
+    plane: { normal, constant },
+    fitted: true,
+    fitDeviation,
+  };
+}
+
+/**
  * Tests the finite polygon, not the infinite plane. This keeps distant
  * coplanar patches visible when a manually defined face peels the point cloud.
  */
