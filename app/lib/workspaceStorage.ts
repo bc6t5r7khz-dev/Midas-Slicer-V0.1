@@ -1,5 +1,6 @@
 import type {
   LocalBasis,
+  ModelElement,
   ModelNode,
   SliceRanges,
   VolumeFace,
@@ -24,6 +25,9 @@ export type SavedWorkspace = {
   basis: LocalBasis | null;
   slice: SliceRanges;
   selectedNodeId: number | null;
+  elements?: ModelElement[];
+  showElementSkin?: boolean;
+  elementSkinVolume?: boolean;
 };
 
 const DATABASE_NAME = "mct-section-lab";

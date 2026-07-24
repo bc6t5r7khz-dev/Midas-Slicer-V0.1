@@ -1,9 +1,11 @@
-import type { ModelNode } from "./types";
+import type { ModelElement, ModelNode } from "./types";
 
 export type ParseResult = {
   nodes: ModelNode[];
   skippedLines: number;
   duplicateIds: number;
+  elements: ModelElement[];
+  skippedElements: number;
 };
 
 const SECTION_LINE = /^\s*\*([A-Z0-9_-]+)/i;
@@ -12,13 +14,16 @@ const SECTION_LINE = /^\s*\*([A-Z0-9_-]+)/i;
  * Parses only the *NODE block of a MIDAS Civil MCT export.
  * Expected records are: node id, X, Y, Z[, ignored fields...].
  */
-export function parseMctNodes(source: string): ParseResult {
+export function parseMctModel(source: string): ParseResult {
   const lines = source.replace(/^\uFEFF/, "").split(/\r?\n/);
   const nodesById = new Map<number, ModelNode>();
   let inNodeSection = false;
   let foundNodeSection = false;
   let skippedLines = 0;
   let duplicateIds = 0;
+  let sectionName = "";
+  let skippedElements = 0;
+  const elements: ModelElement[] = [];
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
@@ -27,18 +32,43 @@ export function parseMctNodes(source: string): ParseResult {
     const section = line.match(SECTION_LINE);
     if (section) {
       const name = section[1].toUpperCase();
+      sectionName = name;
       if (name === "NODE") {
         inNodeSection = true;
         foundNodeSection = true;
         continue;
       }
-      if (inNodeSection) break;
+      inNodeSection = false;
+      continue;
+    }
+
+    const fields = line.split(",").map((field) => field.trim());
+    if (sectionName === "ELEMENT") {
+      const id = Number(fields[0]);
+      const type = fields[1]?.toUpperCase() as ModelElement["type"];
+      const supported = new Set([
+        "PLATE",
+        "PLSTRS",
+        "PLSTRN",
+        "AXISYM",
+        "SOLID",
+      ]);
+      const limit = type === "SOLID" ? 8 : 4;
+      const nodeIds = fields
+        .slice(4, 4 + limit)
+        .map(Number)
+        .filter((value) => Number.isInteger(value) && value > 0)
+        .filter((value, index, values) => values.indexOf(value) === index);
+      const minimum = type === "SOLID" ? 4 : 3;
+      if (!Number.isInteger(id) || !supported.has(type) || nodeIds.length < minimum) {
+        if (supported.has(type)) skippedElements += 1;
+        continue;
+      }
+      elements.push({ id, type, nodeIds });
       continue;
     }
 
     if (!inNodeSection) continue;
-
-    const fields = line.split(",").map((field) => field.trim());
     if (fields.length < 4) {
       skippedLines += 1;
       continue;
@@ -73,5 +103,9 @@ export function parseMctNodes(source: string): ParseResult {
     nodes: [...nodesById.values()],
     skippedLines,
     duplicateIds,
+    elements,
+    skippedElements,
   };
 }
+
+export const parseMctNodes = parseMctModel;

@@ -6,6 +6,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { toLocal, transformPlane } from "../lib/coordinateSystem";
 import type {
   LocalBasis,
+  ElementSurface,
   ModelNode,
   SliceRanges,
   Vec3,
@@ -37,6 +38,8 @@ type Props = {
   volumeConfirmed: boolean;
   pickTarget: PickTarget;
   tolerance: number;
+  elementSurfaces: ElementSurface[];
+  showElementSkin: boolean;
   onHover: (payload: {
     node: ModelNode;
     clientX: number;
@@ -57,6 +60,7 @@ type SceneState = {
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
   faceGroup: THREE.Group;
+  elementGroup: THREE.Group;
   geometry: THREE.BufferGeometry;
   material: THREE.ShaderMaterial;
   points: THREE.Points;
@@ -213,6 +217,8 @@ export default function PointCloudViewport({
   volumeConfirmed,
   pickTarget,
   tolerance,
+  elementSurfaces,
+  showElementSkin,
   onHover,
   onHoverFace,
   onPickNode,
@@ -305,6 +311,8 @@ export default function PointCloudViewport({
 
       const faceGroup = new THREE.Group();
       scene.add(faceGroup);
+      const elementGroup = new THREE.Group();
+      scene.add(elementGroup);
 
       const geometry = new THREE.BufferGeometry();
       const material = new THREE.ShaderMaterial({
@@ -423,7 +431,7 @@ export default function PointCloudViewport({
         return closest;
       };
 
-      const rotateWithSwappedAxes = (deltaX: number, deltaY: number) => {
+      const rotateNaturally = (deltaX: number, deltaY: number) => {
         const offset = camera.position.clone().sub(controls.target);
         const toYUp = new THREE.Quaternion().setFromUnitVectors(
           camera.up.clone().normalize(),
@@ -435,8 +443,8 @@ export default function PointCloudViewport({
         const radiansPerPixel =
           (Math.PI * 2) /
           Math.max(renderer.domElement.clientHeight, 1);
-        spherical.theta -= deltaY * radiansPerPixel;
-        spherical.phi -= deltaX * radiansPerPixel;
+        spherical.theta -= deltaX * radiansPerPixel;
+        spherical.phi -= deltaY * radiansPerPixel;
         spherical.makeSafe();
         offset.setFromSpherical(spherical).applyQuaternion(fromYUp);
         camera.position.copy(controls.target).add(offset);
@@ -479,7 +487,7 @@ export default function PointCloudViewport({
           return;
         }
         if (orbitDrag && !edgeDrag) {
-          rotateWithSwappedAxes(
+          rotateNaturally(
             event.clientX - orbitDrag.x,
             event.clientY - orbitDrag.y,
           );
@@ -766,6 +774,7 @@ export default function PointCloudViewport({
         camera,
         controls,
         faceGroup,
+        elementGroup,
         geometry,
         material,
         points,
@@ -803,6 +812,7 @@ export default function PointCloudViewport({
           handleContextLost,
         );
         disposeGroup(faceGroup);
+        disposeGroup(elementGroup);
         geometry.dispose();
         material.dispose();
         renderer.dispose();
@@ -889,6 +899,76 @@ export default function PointCloudViewport({
     displayOffset.x,
     displayOffset.y,
     displayOffset.z,
+  ]);
+
+  useEffect(() => {
+    const state = sceneRef.current;
+    if (!state) return;
+    disposeGroup(state.elementGroup);
+    state.elementGroup.visible = showElementSkin;
+    if (!showElementSkin || !elementSurfaces.length) return;
+
+    const toDisplay = (point: Vec3) => (basis ? toLocal(point, basis) : point);
+    const trianglePositions: number[] = [];
+    const edgePositions: number[] = [];
+    for (const surface of elementSurfaces) {
+      const vertices = surface.vertices.map(toDisplay);
+      for (let index = 1; index < vertices.length - 1; index += 1) {
+        [vertices[0], vertices[index], vertices[index + 1]].forEach((vertex) => {
+          const point = toThree(vertex, displayOffset);
+          trianglePositions.push(point.x, point.y, point.z);
+        });
+      }
+      vertices.forEach((vertex, index) => {
+        const next = vertices[(index + 1) % vertices.length];
+        const a = toThree(vertex, displayOffset);
+        const b = toThree(next, displayOffset);
+        edgePositions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      });
+    }
+
+    const meshGeometry = new THREE.BufferGeometry();
+    meshGeometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(trianglePositions, 3),
+    );
+    meshGeometry.computeVertexNormals();
+    state.elementGroup.add(
+      new THREE.Mesh(
+        meshGeometry,
+        new THREE.MeshBasicMaterial({
+          color: 0x91afba,
+          opacity: volumeConfirmed ? 0.18 : 0.1,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      ),
+    );
+
+    const edgeGeometry = new THREE.BufferGeometry();
+    edgeGeometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(edgePositions, 3),
+    );
+    state.elementGroup.add(
+      new THREE.LineSegments(
+        edgeGeometry,
+        new THREE.LineBasicMaterial({
+          color: 0x05090c,
+          opacity: 0.72,
+          transparent: true,
+        }),
+      ),
+    );
+  }, [
+    basis,
+    displayOffset.x,
+    displayOffset.y,
+    displayOffset.z,
+    elementSurfaces,
+    showElementSkin,
+    volumeConfirmed,
   ]);
 
   useEffect(() => {

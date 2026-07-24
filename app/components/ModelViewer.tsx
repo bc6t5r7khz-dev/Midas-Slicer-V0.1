@@ -7,7 +7,8 @@ import {
   transformNodes,
 } from "../lib/coordinateSystem";
 import { autoHullFaces } from "../lib/autoVolume";
-import { parseMctNodes } from "../lib/mctParser";
+import { parseMctModel } from "../lib/mctParser";
+import { buildElementSkin } from "../lib/elementSkin";
 import { createSampleMct } from "../lib/sampleModel";
 import { smartFaceFromSeed } from "../lib/smartSelect";
 import {
@@ -24,6 +25,7 @@ import {
 import type {
   Bounds,
   LocalBasis,
+  ModelElement,
   ModelNode,
   SliceRanges,
   Vec3,
@@ -74,6 +76,9 @@ const cross = (a: Vec3, b: Vec3): Vec3 => ({
 export default function ModelViewer() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [allNodes, setAllNodes] = useState<ModelNode[]>([]);
+  const [elements, setElements] = useState<ModelElement[]>([]);
+  const [showElementSkin, setShowElementSkin] = useState(true);
+  const [elementSkinVolume, setElementSkinVolume] = useState(false);
   const [fileName, setFileName] = useState("Demo bridge lattice");
   const [globalBounds, setGlobalBounds] = useState<Bounds | null>(null);
   const [activeTab, setActiveTab] = useState<WorkflowTab>("volume");
@@ -114,6 +119,14 @@ export default function ModelViewer() {
   const [workspaceReady, setWorkspaceReady] = useState(false);
 
   const tolerance = globalBounds ? modelTolerance(globalBounds) : 1e-6;
+  const elementSkin = useMemo(
+    () => buildElementSkin(elements, allNodes),
+    [allNodes, elements],
+  );
+  const closedElementShells = useMemo(
+    () => elementSkin.shells.filter((shell) => shell.closed),
+    [elementSkin.shells],
+  );
   const facePlanes = useMemo(() => faces.map((face) => face.plane), [faces]);
   const automaticVolume = useMemo(
     () => faces.length >= 4 && faces.every((face) => face.automatic),
@@ -196,8 +209,11 @@ export default function ModelViewer() {
     return getBounds(candidates, Boolean(basis));
   }, [allNodes, basis, displayNodes]);
 
-  const resetWorkflow = useCallback((nodes: ModelNode[], bounds: Bounds) => {
+  const resetWorkflow = useCallback((nodes: ModelNode[], bounds: Bounds, nextElements: ModelElement[] = []) => {
     setAllNodes(nodes);
+    setElements(nextElements);
+    setShowElementSkin(nextElements.length > 0);
+    setElementSkinVolume(false);
     setGlobalBounds(bounds);
     setFaces([]);
     setDefiningFaces(false);
@@ -218,13 +234,13 @@ export default function ModelViewer() {
   const loadText = useCallback(
     (text: string, name: string) => {
       try {
-        const result = parseMctNodes(text);
+        const result = parseMctModel(text);
         const bounds = getBounds(result.nodes, false);
-        resetWorkflow(result.nodes, bounds);
+        resetWorkflow(result.nodes, bounds, result.elements);
         setFileName(name);
         setError(null);
         setStatus(
-          `${result.nodes.length.toLocaleString()} nodes parsed${
+          `${result.nodes.length.toLocaleString()} nodes · ${result.elements.length.toLocaleString()} surface/solid elements parsed${
             result.skippedLines
               ? ` · ${result.skippedLines} lines skipped`
               : ""
@@ -257,6 +273,9 @@ export default function ModelViewer() {
           : restoredNodes;
         const bounds = getBounds(restoredNodes, false);
         setAllNodes(nodes);
+        setElements(saved.elements ?? []);
+        setShowElementSkin(saved.showElementSkin ?? Boolean(saved.elements?.length));
+        setElementSkinVolume(saved.elementSkinVolume ?? false);
         setFileName(saved.fileName);
         setGlobalBounds(bounds);
         setFaces(saved.faces);
@@ -314,6 +333,9 @@ export default function ModelViewer() {
         basis,
         slice,
         selectedNodeId: selectedNode?.id ?? null,
+        elements,
+        showElementSkin,
+        elementSkinVolume,
       };
       void saveWorkspace(workspace).catch(() => {
         setError(
@@ -329,6 +351,8 @@ export default function ModelViewer() {
     definingFaces,
     draftNodeIds,
     faces,
+    elements,
+    elementSkinVolume,
     fileName,
     floorFaceId,
     selectedFaceIds,
@@ -337,6 +361,7 @@ export default function ModelViewer() {
     smartVariant,
     smartAxis,
     slice,
+    showElementSkin,
     volumeConfirmed,
     workspaceReady,
     xDirectionNodeIds,
@@ -799,6 +824,7 @@ export default function ModelViewer() {
       setSlice(fullSlice(getBounds(retained, Boolean(basis))));
     }
     setVolumeConfirmed(true);
+    setElementSkinVolume(false);
     setDefiningFaces(false);
     setSmartSelecting(false);
     setDraftNodeIds([]);
@@ -807,6 +833,7 @@ export default function ModelViewer() {
 
   const undoVolumeConfirmation = () => {
     setVolumeConfirmed(false);
+    setElementSkinVolume(false);
     setConfirmWarning(false);
     setActiveTab("volume");
     setDefiningFaces(false);
@@ -1102,6 +1129,53 @@ export default function ModelViewer() {
                 remains available for automatic planar patches.
               </p>
             </section>
+
+            {elements.length > 0 && (
+              <section className="panel-section element-skin-section">
+                <div className="section-heading">
+                  <div>
+                    <span className="eyebrow">MCT ELEMENT SKIN</span>
+                    <strong>
+                      {elementSkin.surfaces.length.toLocaleString()} faces
+                    </strong>
+                  </div>
+                  <button onClick={() => setShowElementSkin((value) => !value)}>
+                    {showElementSkin ? "Hide" : "Show"}
+                  </button>
+                </div>
+                <p>
+                  {elementSkin.plateElementCount.toLocaleString()} plate ·{" "}
+                  {elementSkin.solidElementCount.toLocaleString()} solid ·{" "}
+                  {closedElementShells.length} closed shell
+                  {closedElementShells.length === 1 ? "" : "s"}
+                </p>
+                {elementSkin.shells.some((shell) => !shell.closed) && (
+                  <small>
+                    Open edges detected in{" "}
+                    {elementSkin.shells.filter((shell) => !shell.closed).length}{" "}
+                    shell component(s).
+                  </small>
+                )}
+                <button
+                  className="button primary wide"
+                  disabled={!closedElementShells.length}
+                  onClick={() => {
+                    setElementSkinVolume(true);
+                    setVolumeConfirmed(true);
+                    setShowElementSkin(true);
+                    setDefiningFaces(false);
+                    setSmartSelecting(false);
+                    setStatus(
+                      "Closed MCT element skin is now the inspection volume.",
+                    );
+                  }}
+                >
+                  {elementSkinVolume
+                    ? "Element Skin In Use"
+                    : "Use Element Skin as Volume"}
+                </button>
+              </section>
+            )}
 
             <div className="action-grid">
               <button
@@ -1443,6 +1517,8 @@ export default function ModelViewer() {
               : "node"
           }
           tolerance={tolerance}
+          elementSurfaces={elementSkin.surfaces}
+          showElementSkin={showElementSkin}
           onHover={setHover}
           onHoverFace={setHoveredFaceId}
           onPickNode={handleNodePick}
@@ -1460,7 +1536,7 @@ export default function ModelViewer() {
             }`}
           />
           <strong>{instruction}</strong>
-          <span>Left drag: horizontal ↕ · vertical ↔ · Middle pan · Scroll zoom</span>
+          <span>Left drag: horizontal orbit · vertical tilt · Middle pan · Scroll zoom</span>
         </div>
 
         <div className="axis-badge" aria-label="Local axis legend">

@@ -7,6 +7,28 @@ export type ModelNode = {
   local: Vec3 | null;
 };
 
+export type ModelElement = {
+  id: number;
+  type: "PLATE" | "PLSTRS" | "PLSTRN" | "AXISYM" | "SOLID";
+  nodeIds: number[];
+};
+
+export type ElementSurface = {
+  id: string;
+  elementId: number;
+  nodeIds: number[];
+  vertices: Vec3[];
+  source: "plate" | "solid";
+};
+
+export type ElementShell = {
+  id: string;
+  surfaceIds: string[];
+  closed: boolean;
+  boundaryEdgeCount: number;
+  nonManifoldEdgeCount: number;
+};
+
 export type LocalBasis = {
   origin: Vec3;
   xAxis: Vec3;
