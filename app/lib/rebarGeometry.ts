@@ -44,7 +44,7 @@ function convexHull(points: Point2[]) {
 }
 
 function insetConvexPolygon(points: Point2[], distance: number) {
-  if (points.length < 3 || distance <= 0) return points;
+  if (points.length < 3 || distance === 0) return points;
   return points.map((point, index) => {
     const previous = points[(index - 1 + points.length) % points.length];
     const next = points[(index + 1) % points.length];
@@ -202,16 +202,16 @@ export function createSectionBoundary(
   return { segments, loops };
 }
 
-export function createCoverOutline(
+export function createCoverOutlines(
   nodes: ModelNode[],
   elements: ModelElement[],
   axis: Axis,
   coordinate: number,
   coverModelUnits: number,
-): Vec3[] {
+): Vec3[][] {
   const [aAxis, bAxis] = otherAxes[axis];
   const boundary = createSectionBoundary(nodes, elements, axis, coordinate);
-  let loop = boundary.loops
+  let loops = boundary.loops
     .map((vertices) => ({
       vertices,
       area: Math.abs(
@@ -221,28 +221,73 @@ export function createCoverOutline(
         }, 0) / 2,
       ),
     }))
-    .sort((a, b) => b.area - a.area)[0]?.vertices;
-  if (!loop) {
+    .sort((a, b) => b.area - a.area)
+    .map((entry) => entry.vertices);
+  if (!loops.length) {
     const points = nodes.map((node) => node.local ?? node.global);
-    loop = convexHull(points.map((point) => ({ a: point[aAxis], b: point[bAxis] }))).map(
-      (point) => ({
-        x: axis === "x" ? coordinate : aAxis === "x" ? point.a : point.b,
-        y: axis === "y" ? coordinate : aAxis === "y" ? point.a : point.b,
-        z: axis === "z" ? coordinate : aAxis === "z" ? point.a : point.b,
-      }),
-    );
+    loops = [
+      convexHull(
+        points.map((point) => ({
+          a: point[aAxis],
+          b: point[bAxis],
+        })),
+      ).map((point) => ({
+        x:
+          axis === "x"
+            ? coordinate
+            : aAxis === "x"
+              ? point.a
+              : point.b,
+        y:
+          axis === "y"
+            ? coordinate
+            : aAxis === "y"
+              ? point.a
+              : point.b,
+        z:
+          axis === "z"
+            ? coordinate
+            : aAxis === "z"
+              ? point.a
+              : point.b,
+      })),
+    ];
   }
-  const points2 = loop.map((point) => ({ a: point[aAxis], b: point[bAxis] }));
-  const signedArea = points2.reduce((area, point, index) => {
-    const next = points2[(index + 1) % points2.length];
-    return area + point.a * next.b - next.a * point.b;
-  }, 0);
-  const oriented = signedArea < 0 ? [...points2].reverse() : points2;
-  return insetConvexPolygon(oriented, coverModelUnits).map((point) => ({
-    x: axis === "x" ? coordinate : aAxis === "x" ? point.a : point.b,
-    y: axis === "y" ? coordinate : aAxis === "y" ? point.a : point.b,
-    z: axis === "z" ? coordinate : aAxis === "z" ? point.a : point.b,
-  }));
+  return loops.map((loop, loopIndex) => {
+    const points2 = loop.map((point) => ({
+      a: point[aAxis],
+      b: point[bAxis],
+    }));
+    const signedArea = points2.reduce((area, point, index) => {
+      const next = points2[(index + 1) % points2.length];
+      return area + point.a * next.b - next.a * point.b;
+    }, 0);
+    const oriented = signedArea < 0 ? [...points2].reverse() : points2;
+    const offset = loopIndex === 0 ? coverModelUnits : -coverModelUnits;
+    return insetConvexPolygon(oriented, offset).map((point) => ({
+      x: axis === "x" ? coordinate : aAxis === "x" ? point.a : point.b,
+      y: axis === "y" ? coordinate : aAxis === "y" ? point.a : point.b,
+      z: axis === "z" ? coordinate : aAxis === "z" ? point.a : point.b,
+    }));
+  });
+}
+
+export function createCoverOutline(
+  nodes: ModelNode[],
+  elements: ModelElement[],
+  axis: Axis,
+  coordinate: number,
+  coverModelUnits: number,
+): Vec3[] {
+  return (
+    createCoverOutlines(
+      nodes,
+      elements,
+      axis,
+      coordinate,
+      coverModelUnits,
+    )[0] ?? []
+  );
 }
 
 export function distributeBars(

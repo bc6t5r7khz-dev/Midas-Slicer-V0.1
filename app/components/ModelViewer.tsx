@@ -12,7 +12,7 @@ import { autoHullFaces } from "../lib/autoVolume";
 import { parseMctModel } from "../lib/mctParser";
 import { buildElementSkin } from "../lib/elementSkin";
 import {
-  createCoverOutline,
+  createCoverOutlines,
   distributeBars,
 } from "../lib/rebarGeometry";
 import { createSampleMct } from "../lib/sampleModel";
@@ -189,6 +189,7 @@ export default function ModelViewer() {
     y: [0, 1],
     z: [0, 1],
   });
+  const [renderSlice, setRenderSlice] = useState<SliceRanges>(slice);
   const [hover, setHover] = useState<{
     node: ModelNode;
     clientX: number;
@@ -207,6 +208,7 @@ export default function ModelViewer() {
   );
   const [rebarRuns, setRebarRuns] = useState<RebarRun[]>([]);
   const [showConcreteSkin, setShowConcreteSkin] = useState(true);
+  const [showRebarLabels, setShowRebarLabels] = useState(false);
   const [rebarPhase, setRebarPhase] = useState<
     "idle" | "start" | "lines" | "path-start" | "end" | "path-end" | "spacing"
   >("idle");
@@ -220,9 +222,14 @@ export default function ModelViewer() {
   const [rebarSpacing, setRebarSpacing] = useState(12);
   const [rebarPathStart, setRebarPathStart] = useState<Vec3 | null>(null);
   const [rebarPathEnd, setRebarPathEnd] = useState<Vec3 | null>(null);
-  const [selectedRebarRunId, setSelectedRebarRunId] = useState<string | null>(
-    null,
+  const [selectedRebarRunIds, setSelectedRebarRunIds] = useState<Set<string>>(
+    new Set(),
   );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setRenderSlice(slice), 55);
+    return () => window.clearTimeout(timer);
+  }, [slice]);
 
   const tolerance = globalBounds ? modelTolerance(globalBounds) : 1e-6;
   const elementSkin = useMemo(
@@ -355,28 +362,29 @@ export default function ModelViewer() {
     [rebarAxis, rebarRuns, tolerance],
   );
 
-  const rebarGuideLine = useMemo(() => {
+  const rebarGuideLines = useMemo(() => {
     if (
       !inchesPerModelUnit ||
       rebarPhase === "idle" ||
       rebarPhase === "start"
     ) {
-      return null;
+      return [];
     }
     const coordinate =
       rebarPhase === "path-end" || rebarPhase === "spacing"
         ? rebarEnd
         : rebarStart;
-    const points = createCoverOutline(
+    return createCoverOutlines(
       allNodes,
       elements,
       rebarAxis,
       coordinate,
       2 / inchesPerModelUnit,
-    );
-    return points.length >= 3
-      ? { id: "cover-guide-2", points }
-      : null;
+    ).map((points, index) => ({
+      id: `cover-guide-2-${index}`,
+      points,
+      closed: true,
+    }));
   }, [
     allNodes,
     elements,
@@ -386,28 +394,29 @@ export default function ModelViewer() {
     rebarPhase,
     rebarStart,
   ]);
-  const rebarInnerGuideLine = useMemo(() => {
+  const rebarInnerGuideLines = useMemo(() => {
     if (
       !inchesPerModelUnit ||
       rebarPhase === "idle" ||
       rebarPhase === "start"
     ) {
-      return null;
+      return [];
     }
     const coordinate =
       rebarPhase === "path-end" || rebarPhase === "spacing"
         ? rebarEnd
         : rebarStart;
-    const points = createCoverOutline(
+    return createCoverOutlines(
       allNodes,
       elements,
       rebarAxis,
       coordinate,
       4 / inchesPerModelUnit,
-    );
-    return points.length >= 3
-      ? { id: "cover-guide-4", points }
-      : null;
+    ).map((points, index) => ({
+      id: `cover-guide-4-${index}`,
+      points,
+      closed: true,
+    }));
   }, [
     allNodes,
     elements,
@@ -433,7 +442,7 @@ export default function ModelViewer() {
     setPendingRebarLine(null);
     setRebarPathStart(null);
     setRebarPathEnd(null);
-    setSelectedRebarRunId(null);
+    setSelectedRebarRunIds(new Set());
     setRebarAxis("x");
     setRebarStart(bounds.x[0]);
     setRebarEnd(bounds.x[1]);
@@ -510,6 +519,7 @@ export default function ModelViewer() {
           ),
         );
         setShowConcreteSkin(saved.showConcreteSkin ?? true);
+        setShowRebarLabels(saved.showRebarLabels ?? false);
         setFileName(saved.fileName);
         setGlobalBounds(bounds);
         setFaces(saved.faces);
@@ -573,6 +583,7 @@ export default function ModelViewer() {
         inchesPerModelUnit,
         rebarRuns,
         showConcreteSkin,
+        showRebarLabels,
       };
       void saveWorkspace(workspace).catch(() => {
         setError(
@@ -602,6 +613,7 @@ export default function ModelViewer() {
     slice,
     showElementSkin,
     showConcreteSkin,
+    showRebarLabels,
     volumeConfirmed,
     workspaceReady,
     xDirectionNodeIds,
@@ -999,7 +1011,7 @@ export default function ModelViewer() {
       lines: rebarLines,
     };
     setRebarRuns((current) => [...current, run]);
-    setSelectedRebarRunId(run.id);
+    setSelectedRebarRunIds(new Set([run.id]));
     setRebarPhase("idle");
     setRebarLines([]);
     setPendingRebarLine(null);
@@ -1465,6 +1477,12 @@ export default function ModelViewer() {
   return (
     <main
       className="app-shell"
+      onClick={(event) => {
+        if (activeTab !== "rebar" || !selectedRebarRunIds.size) return;
+        const target = event.target as HTMLElement;
+        if (target.closest("[data-rebar-selection-control]")) return;
+        setSelectedRebarRunIds(new Set());
+      }}
       onDragEnter={(event) => {
         if (Array.from(event.dataTransfer.types).includes("Files")) {
           event.preventDefault();
@@ -1984,14 +2002,6 @@ export default function ModelViewer() {
 
         {activeTab === "rebar" && currentBounds && (
           <div className="tab-content rebar-content">
-            <section className="panel-section intro compact">
-              <span className="eyebrow">REINFORCEMENT</span>
-              <h1>Lay out bar runs</h1>
-              <p>
-                Sections and spacing use the physical scale defined in
-                Coordinates.
-              </p>
-            </section>
             {!inchesPerModelUnit ? (
               <div className="selection-callout">
                 <strong>Scale required</strong>
@@ -2006,6 +2016,7 @@ export default function ModelViewer() {
                     bounds={currentBounds[axis]}
                     value={slice[axis]}
                     inchesPerUnit={inchesPerModelUnit}
+                    compact
                     onChange={(value) =>
                       setSlice((current) => ({ ...current, [axis]: value }))
                     }
@@ -2020,6 +2031,16 @@ export default function ModelViewer() {
                     }
                   />
                   Show concrete skin
+                </label>
+                <label className="skin-toggle">
+                  <input
+                    type="checkbox"
+                    checked={showRebarLabels}
+                    onChange={(event) =>
+                      setShowRebarLabels(event.target.checked)
+                    }
+                  />
+                  Show bar labels
                 </label>
 
                 {rebarPhase === "idle" && (
@@ -2325,9 +2346,21 @@ export default function ModelViewer() {
                           type="button"
                           key={run.id}
                           className={
-                            selectedRebarRunId === run.id ? "selected" : ""
+                            selectedRebarRunIds.has(run.id) ? "selected" : ""
                           }
-                          onClick={() => setSelectedRebarRunId(run.id)}
+                          data-rebar-selection-control
+                          onClick={(event) => {
+                            if (event.ctrlKey || event.metaKey) {
+                              setSelectedRebarRunIds((current) => {
+                                const next = new Set(current);
+                                if (next.has(run.id)) next.delete(run.id);
+                                else next.add(run.id);
+                                return next;
+                              });
+                            } else {
+                              setSelectedRebarRunIds(new Set([run.id]));
+                            }
+                          }}
                         >
                           <span>
                             <strong>{run.name}</strong>
@@ -2341,18 +2374,20 @@ export default function ModelViewer() {
                     </div>
                     <button
                       className="danger-button bar-run-delete"
-                      disabled={!selectedRebarRunId}
+                      data-rebar-selection-control
+                      disabled={!selectedRebarRunIds.size}
                       onClick={() => {
-                        if (!selectedRebarRunId) return;
+                        if (!selectedRebarRunIds.size) return;
                         setRebarRuns((current) =>
                           current.filter(
-                            (run) => run.id !== selectedRebarRunId,
+                            (run) => !selectedRebarRunIds.has(run.id),
                           ),
                         );
-                        setSelectedRebarRunId(null);
+                        setSelectedRebarRunIds(new Set());
                       }}
                     >
                       Delete selected bar run
+                      {selectedRebarRunIds.size === 1 ? "" : "s"}
                     </button>
                   </section>
                 )}
@@ -2400,7 +2435,7 @@ export default function ModelViewer() {
         <PointCloudViewport
           nodes={displayNodes}
           allNodes={allNodes}
-          slice={slice}
+          slice={renderSlice}
           basis={basis}
           faces={faces}
           previewFace={smartPreviewFace}
@@ -2429,15 +2464,17 @@ export default function ModelViewer() {
           sliceBounds={currentBounds}
           rebarMode={activeTab === "rebar"}
           rebarRuns={rebarRuns}
-          rebarGuideLine={
+          selectedRebarRunIds={selectedRebarRunIds}
+          showRebarLabels={showRebarLabels}
+          rebarGuideLines={
             pendingRebarLine || rebarPhase === "path-end"
-              ? rebarGuideLine
-              : null
+              ? rebarGuideLines
+              : []
           }
-          rebarInnerGuideLine={
+          rebarInnerGuideLines={
             pendingRebarLine || rebarPhase === "path-end"
-              ? rebarInnerGuideLine
-              : null
+              ? rebarInnerGuideLines
+              : []
           }
           rebarOuterEdges={null}
           selectedRebarEdgeIndex={null}
@@ -2447,17 +2484,11 @@ export default function ModelViewer() {
           draftRebarLines={rebarLines}
           rebarSnapLines={
             pendingRebarLine
-              ? [rebarGuideLine, rebarInnerGuideLine]
-                  .filter((line): line is RebarLine => Boolean(line))
-                  .map((line) => ({ ...line, closed: true }))
+              ? [...rebarGuideLines, ...rebarInnerGuideLines]
               : rebarPhase === "path-start"
                 ? rebarLines
                 : rebarPhase === "path-end"
-                  ? [rebarGuideLine, rebarInnerGuideLine]
-                      .filter(
-                        (line): line is RebarLine => Boolean(line),
-                      )
-                      .map((line) => ({ ...line, closed: true }))
+                  ? [...rebarGuideLines, ...rebarInnerGuideLines]
                   : []
           }
           rebarSnapRequired={rebarPhase === "path-start"}

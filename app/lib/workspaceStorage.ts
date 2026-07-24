@@ -32,6 +32,7 @@ export type SavedWorkspace = {
   inchesPerModelUnit?: number | null;
   rebarRuns?: RebarRun[];
   showConcreteSkin?: boolean;
+  showRebarLabels?: boolean;
 };
 
 const DATABASE_NAME = "mct-section-lab";

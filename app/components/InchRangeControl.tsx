@@ -5,6 +5,7 @@ type Props = {
   bounds: [number, number];
   value: [number, number];
   inchesPerUnit: number;
+  compact?: boolean;
   onChange: (value: [number, number]) => void;
 };
 
@@ -13,6 +14,7 @@ export default function InchRangeControl({
   bounds,
   value,
   inchesPerUnit,
+  compact = false,
   onChange,
 }: Props) {
   const span = bounds[1] - bounds[0] || 1;
@@ -35,7 +37,7 @@ export default function InchRangeControl({
         <span><b>{axis}</b> slice</span>
         <span className="range-readout">0–{maxInches.toFixed(1)} in</span>
       </div>
-      <div className="manual-range-values">
+      {!compact && <div className="manual-range-values">
         <label>
           Min
           <input
@@ -58,7 +60,7 @@ export default function InchRangeControl({
             onChange={(event) => apply(low, Number(event.target.value))}
           />
         </label>
-      </div>
+      </div>}
       <div
         className="range-track"
         style={{

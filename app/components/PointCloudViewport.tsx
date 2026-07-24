@@ -55,8 +55,10 @@ type Props = {
   sliceBounds: Bounds | null;
   rebarMode: boolean;
   rebarRuns: RebarRun[];
-  rebarGuideLine: RebarLine | null;
-  rebarInnerGuideLine: RebarLine | null;
+  selectedRebarRunIds: ReadonlySet<string>;
+  showRebarLabels: boolean;
+  rebarGuideLines: RebarLine[];
+  rebarInnerGuideLines: RebarLine[];
   rebarOuterEdges: Array<[Vec3, Vec3]> | null;
   selectedRebarEdgeIndex: number | null;
   rebarEdgeSelectionMode: boolean;
@@ -561,8 +563,10 @@ export default function PointCloudViewport({
   sliceBounds,
   rebarMode,
   rebarRuns,
-  rebarGuideLine,
-  rebarInnerGuideLine,
+  selectedRebarRunIds,
+  showRebarLabels,
+  rebarGuideLines,
+  rebarInnerGuideLines,
   rebarOuterEdges,
   selectedRebarEdgeIndex,
   rebarEdgeSelectionMode,
@@ -686,7 +690,7 @@ export default function PointCloudViewport({
       const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 1000000);
       const renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.localClippingEnabled = true;
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       host.appendChild(renderer.domElement);
 
@@ -1518,10 +1522,14 @@ export default function PointCloudViewport({
         handleContextLost,
       );
 
-      const animate = () => {
+      let lastRenderTime = 0;
+      const animate = (time = 0) => {
         try {
-          controls.update();
-          renderer.render(scene, camera);
+          if (time - lastRenderTime >= 1000 / 30) {
+            controls.update();
+            renderer.render(scene, camera);
+            lastRenderTime = time;
+          }
           animationId = requestAnimationFrame(animate);
         } catch (error) {
           cancelAnimationFrame(animationId);
@@ -1532,7 +1540,7 @@ export default function PointCloudViewport({
           );
         }
       };
-      animate();
+      animationId = requestAnimationFrame(animate);
 
       sceneRef.current = {
         camera,
@@ -1995,7 +2003,9 @@ export default function PointCloudViewport({
     rebarGuideObjectsRef.current = [];
     rebarEdgeObjectsRef.current = [];
     rebarEdgeDataRef.current = [];
-    rebarGuidePointsRef.current = rebarGuideLine?.points ?? [];
+    rebarGuidePointsRef.current = rebarGuideLines.flatMap(
+      (line) => line.points,
+    );
     state.rebarGroup.visible = rebarMode;
     if (!rebarMode) return;
 
@@ -2036,7 +2046,7 @@ export default function PointCloudViewport({
         depthWrite: !alwaysVisible,
       });
       const rods = new THREE.InstancedMesh(
-        new THREE.CylinderGeometry(radius, radius, 1, 12),
+        new THREE.CylinderGeometry(radius, radius, 1, 8),
         rodMaterial,
         segments.length,
       );
@@ -2063,7 +2073,7 @@ export default function PointCloudViewport({
       state.rebarGroup.add(rods);
 
       const jointMeshes = new THREE.InstancedMesh(
-        new THREE.SphereGeometry(radius, 12, 8),
+        new THREE.SphereGeometry(radius, 8, 6),
         rodMaterial.clone(),
         joints.length,
       );
@@ -2079,7 +2089,14 @@ export default function PointCloudViewport({
 
     const rodSegments: Array<[Vec3, Vec3]> = [];
     const rodJoints: Vec3[] = [];
+    const selectedRodSegments: Array<[Vec3, Vec3]> = [];
+    const selectedRodJoints: Vec3[] = [];
     for (const run of rebarRuns) {
+      const runSelected = selectedRebarRunIds.has(run.id);
+      const targetSegments = runSelected
+        ? selectedRodSegments
+        : rodSegments;
+      const targetJoints = runSelected ? selectedRodJoints : rodJoints;
       for (const position of run.positions) {
         for (const line of run.lines) {
           const translated = line.points.map((point) => {
@@ -2096,12 +2113,12 @@ export default function PointCloudViewport({
             }
             return { ...point, [run.axis]: position };
           });
-          rodJoints.push(...translated);
+          targetJoints.push(...translated);
           for (let index = 0; index < translated.length - 1; index += 1) {
-            rodSegments.push([translated[index], translated[index + 1]]);
+            targetSegments.push([translated[index], translated[index + 1]]);
           }
           if (line.closed && translated.length > 2) {
-            rodSegments.push([
+            targetSegments.push([
               translated[translated.length - 1],
               translated[0],
             ]);
@@ -2109,7 +2126,7 @@ export default function PointCloudViewport({
         }
       }
       const firstPoint = run.lines[0]?.points[0];
-      if (firstPoint) {
+      if (showRebarLabels && firstPoint) {
         const label = createTextSprite(run.name);
         if (label) {
           const position = toThree(
@@ -2124,6 +2141,12 @@ export default function PointCloudViewport({
       }
     }
     addRodMeshes(rodSegments, rodJoints, 0x8f1717);
+    addRodMeshes(
+      selectedRodSegments,
+      selectedRodJoints,
+      0xffbf47,
+      true,
+    );
 
     const draftSegments: Array<[Vec3, Vec3]> = [];
     const draftJoints: Vec3[] = [];
@@ -2218,10 +2241,12 @@ export default function PointCloudViewport({
       dashedGuide.renderOrder = 22;
       state.rebarGroup.add(dashedGuide);
     };
-    if (rebarGuideLine) addDashedGuide(rebarGuideLine, 0xe8eef0);
-    if (rebarInnerGuideLine) {
-      addDashedGuide(rebarInnerGuideLine, 0xff7faf);
-    }
+    rebarGuideLines.forEach((line) =>
+      addDashedGuide(line, 0xe8eef0),
+    );
+    rebarInnerGuideLines.forEach((line) =>
+      addDashedGuide(line, 0xff7faf),
+    );
     if (pendingRebarLine) {
       addPolyline(pendingRebarLine.points, 0xff8a2a, 1, false);
     }
@@ -2271,15 +2296,17 @@ export default function PointCloudViewport({
     draftRebarLines,
     pendingRebarLine,
     rebarAxis,
-    rebarGuideLine,
-    rebarInnerGuideLine,
+    rebarGuideLines,
+    rebarInnerGuideLines,
     rebarOuterEdges,
     rebarMode,
     rebarPathEnd,
     rebarPathStart,
     rebarRuns,
     rebarSection,
+    selectedRebarRunIds,
     selectedRebarEdgeIndex,
+    showRebarLabels,
     sliceBounds,
     tolerance,
     inchesPerModelUnit,
