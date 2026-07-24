@@ -1,4 +1,4 @@
-import type { Axis, ModelNode, Vec3 } from "./types";
+import type { Axis, ModelElement, ModelNode, Vec3 } from "./types";
 
 type Point2 = { a: number; b: number };
 
@@ -67,26 +67,178 @@ function insetConvexPolygon(points: Point2[], distance: number) {
   });
 }
 
+const solidEdges = (size: number): Array<[number, number]> => {
+  if (size === 4) return [[0, 1], [1, 2], [2, 0], [0, 3], [1, 3], [2, 3]];
+  if (size === 6) {
+    return [
+      [0, 1], [1, 2], [2, 0], [3, 4], [4, 5], [5, 3],
+      [0, 3], [1, 4], [2, 5],
+    ];
+  }
+  if (size === 8) {
+    return [
+      [0, 1], [1, 2], [2, 3], [3, 0],
+      [4, 5], [5, 6], [6, 7], [7, 4],
+      [0, 4], [1, 5], [2, 6], [3, 7],
+    ];
+  }
+  return [];
+};
+
+const pointKey = (point: Vec3, precision: number) =>
+  `${Math.round(point.x * precision)},${Math.round(point.y * precision)},${Math.round(point.z * precision)}`;
+
+export function createSectionBoundary(
+  nodes: ModelNode[],
+  elements: ModelElement[],
+  axis: Axis,
+  coordinate: number,
+): { segments: Array<[Vec3, Vec3]>; loops: Vec3[][] } {
+  const [aAxis, bAxis] = otherAxes[axis];
+  const nodeMap = new Map(nodes.map((node) => [node.id, node.local ?? node.global]));
+  const coordinates = [...nodeMap.values()];
+  const minimum = Math.min(...coordinates.map((point) => point[axis]));
+  const maximum = Math.max(...coordinates.map((point) => point[axis]));
+  const span = Math.max(maximum - minimum, 1);
+  const tolerance = span * 1e-7;
+  const effectiveCoordinate =
+    coordinate + tolerance <= maximum
+      ? coordinate + tolerance
+      : coordinate - tolerance;
+  const precision = 1 / Math.max(tolerance, 1e-8);
+  const edgeCounts = new Map<
+    string,
+    { segment: [Vec3, Vec3]; count: number }
+  >();
+
+  for (const element of elements) {
+    if (element.type !== "SOLID") continue;
+    const vertices = element.nodeIds.map((id) => nodeMap.get(id));
+    if (vertices.some((point) => !point)) continue;
+    const intersections: Vec3[] = [];
+    for (const [firstIndex, secondIndex] of solidEdges(vertices.length)) {
+      const first = vertices[firstIndex]!;
+      const second = vertices[secondIndex]!;
+      const firstDistance = first[axis] - effectiveCoordinate;
+      const secondDistance = second[axis] - effectiveCoordinate;
+      if (Math.abs(firstDistance) <= tolerance) {
+        intersections.push({ ...first, [axis]: coordinate });
+      }
+      if (firstDistance * secondDistance < 0) {
+        const amount = firstDistance / (firstDistance - secondDistance);
+        intersections.push({
+          x: first.x + (second.x - first.x) * amount,
+          y: first.y + (second.y - first.y) * amount,
+          z: first.z + (second.z - first.z) * amount,
+          [axis]: coordinate,
+        });
+      }
+    }
+    const unique = intersections.filter(
+      (point, index) =>
+        intersections.findIndex(
+          (candidate) => pointKey(candidate, precision) === pointKey(point, precision),
+        ) === index,
+    );
+    if (unique.length < 3) continue;
+    const center = unique.reduce(
+      (sum, point) => ({
+        a: sum.a + point[aAxis] / unique.length,
+        b: sum.b + point[bAxis] / unique.length,
+      }),
+      { a: 0, b: 0 },
+    );
+    unique.sort(
+      (first, second) =>
+        Math.atan2(first[bAxis] - center.b, first[aAxis] - center.a) -
+        Math.atan2(second[bAxis] - center.b, second[aAxis] - center.a),
+    );
+    unique.forEach((point, index) => {
+      const next = unique[(index + 1) % unique.length];
+      const firstKey = pointKey(point, precision);
+      const secondKey = pointKey(next, precision);
+      const key =
+        firstKey < secondKey
+          ? `${firstKey}|${secondKey}`
+          : `${secondKey}|${firstKey}`;
+      const current = edgeCounts.get(key);
+      edgeCounts.set(key, {
+        segment: current?.segment ?? [point, next],
+        count: (current?.count ?? 0) + 1,
+      });
+    });
+  }
+
+  const segments = [...edgeCounts.values()]
+    .filter((entry) => entry.count % 2 === 1)
+    .map((entry) => entry.segment);
+  const unused = new Set(segments.map((_, index) => index));
+  const loops: Vec3[][] = [];
+  while (unused.size) {
+    const startIndex = unused.values().next().value as number;
+    unused.delete(startIndex);
+    const [start, next] = segments[startIndex];
+    const loop = [start, next];
+    let current = next;
+    while (loop.length <= segments.length + 1) {
+      const currentKey = pointKey(current, precision);
+      const match = [...unused].find((index) => {
+        const [a, b] = segments[index];
+        return (
+          pointKey(a, precision) === currentKey ||
+          pointKey(b, precision) === currentKey
+        );
+      });
+      if (match === undefined) break;
+      unused.delete(match);
+      const [a, b] = segments[match];
+      current =
+        pointKey(a, precision) === currentKey ? b : a;
+      if (pointKey(current, precision) === pointKey(loop[0], precision)) break;
+      loop.push(current);
+    }
+    if (loop.length >= 3) loops.push(loop);
+  }
+  return { segments, loops };
+}
+
 export function createCoverOutline(
   nodes: ModelNode[],
+  elements: ModelElement[],
   axis: Axis,
   coordinate: number,
   coverModelUnits: number,
 ): Vec3[] {
   const [aAxis, bAxis] = otherAxes[axis];
-  const coordinates = nodes.map((node) => node.local ?? node.global);
-  const closest = Math.min(
-    ...coordinates.map((point) => Math.abs(point[axis] - coordinate)),
-  );
-  const span = Math.max(
-    ...coordinates.map((point) => point[axis]),
-  ) - Math.min(...coordinates.map((point) => point[axis]));
-  const tolerance = Math.max(span * 1e-7, 1e-7);
-  const sectionPoints = coordinates
-    .filter((point) => Math.abs(point[axis] - coordinate) <= closest + tolerance)
-    .map((point) => ({ a: point[aAxis], b: point[bAxis] }));
-  const outline = insetConvexPolygon(convexHull(sectionPoints), coverModelUnits);
-  return outline.map((point) => ({
+  const boundary = createSectionBoundary(nodes, elements, axis, coordinate);
+  let loop = boundary.loops
+    .map((vertices) => ({
+      vertices,
+      area: Math.abs(
+        vertices.reduce((area, point, index) => {
+          const next = vertices[(index + 1) % vertices.length];
+          return area + point[aAxis] * next[bAxis] - next[aAxis] * point[bAxis];
+        }, 0) / 2,
+      ),
+    }))
+    .sort((a, b) => b.area - a.area)[0]?.vertices;
+  if (!loop) {
+    const points = nodes.map((node) => node.local ?? node.global);
+    loop = convexHull(points.map((point) => ({ a: point[aAxis], b: point[bAxis] }))).map(
+      (point) => ({
+        x: axis === "x" ? coordinate : aAxis === "x" ? point.a : point.b,
+        y: axis === "y" ? coordinate : aAxis === "y" ? point.a : point.b,
+        z: axis === "z" ? coordinate : aAxis === "z" ? point.a : point.b,
+      }),
+    );
+  }
+  const points2 = loop.map((point) => ({ a: point[aAxis], b: point[bAxis] }));
+  const signedArea = points2.reduce((area, point, index) => {
+    const next = points2[(index + 1) % points2.length];
+    return area + point.a * next.b - next.a * point.b;
+  }, 0);
+  const oriented = signedArea < 0 ? [...points2].reverse() : points2;
+  return insetConvexPolygon(oriented, coverModelUnits).map((point) => ({
     x: axis === "x" ? coordinate : aAxis === "x" ? point.a : point.b,
     y: axis === "y" ? coordinate : aAxis === "y" ? point.a : point.b,
     z: axis === "z" ? coordinate : aAxis === "z" ? point.a : point.b,

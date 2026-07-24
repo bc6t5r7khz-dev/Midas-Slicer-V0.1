@@ -56,7 +56,7 @@ type Props = {
   rebarMode: boolean;
   rebarRuns: RebarRun[];
   rebarGuideLine: RebarLine | null;
-  rebarOuterOutline: Vec3[] | null;
+  rebarOuterEdges: Array<[Vec3, Vec3]> | null;
   selectedRebarEdgeIndex: number | null;
   rebarEdgeSelectionMode: boolean;
   onPickRebarEdge: (edgeIndex: number) => void;
@@ -548,7 +548,7 @@ export default function PointCloudViewport({
   rebarMode,
   rebarRuns,
   rebarGuideLine,
-  rebarOuterOutline,
+  rebarOuterEdges,
   selectedRebarEdgeIndex,
   rebarEdgeSelectionMode,
   onPickRebarEdge,
@@ -1755,10 +1755,8 @@ export default function PointCloudViewport({
         }
       }
     }
-    if (rebarOuterOutline?.length) {
-      rebarOuterOutline.forEach((point, edgeIndex) => {
-        const next =
-          rebarOuterOutline[(edgeIndex + 1) % rebarOuterOutline.length];
+    if (rebarOuterEdges?.length) {
+      rebarOuterEdges.forEach(([point, next], edgeIndex) => {
         const edge = new THREE.Line(
           new THREE.BufferGeometry().setFromPoints([
             toThree(point, displayOffset),
@@ -1831,7 +1829,7 @@ export default function PointCloudViewport({
     pendingRebarLine,
     rebarAxis,
     rebarGuideLine,
-    rebarOuterOutline,
+    rebarOuterEdges,
     rebarMode,
     rebarRuns,
     rebarSection,

@@ -9,7 +9,11 @@ import {
 import { autoHullFaces } from "../lib/autoVolume";
 import { parseMctModel } from "../lib/mctParser";
 import { buildElementSkin } from "../lib/elementSkin";
-import { createCoverOutline, distributeBars } from "../lib/rebarGeometry";
+import {
+  createCoverOutline,
+  createSectionBoundary,
+  distributeBars,
+} from "../lib/rebarGeometry";
 import { createSampleMct } from "../lib/sampleModel";
 import { smartFaceFromSeed } from "../lib/smartSelect";
 import {
@@ -251,6 +255,7 @@ export default function ModelViewer() {
     }
     const points = createCoverOutline(
       allNodes,
+      elements,
       rebarAxis,
       rebarStart,
       2 / inchesPerModelUnit,
@@ -260,26 +265,27 @@ export default function ModelViewer() {
       : null;
   }, [
     allNodes,
+    elements,
     inchesPerModelUnit,
     rebarAxis,
     rebarPhase,
     rebarStart,
   ]);
-  const rebarOuterOutline = useMemo(() => {
+  const rebarOuterEdges = useMemo(() => {
     if (
       rebarPhase === "idle" ||
       rebarPhase === "start"
     ) {
       return null;
     }
-    const points = createCoverOutline(
+    const boundary = createSectionBoundary(
       allNodes,
+      elements,
       rebarAxis,
       rebarStart,
-      0,
     );
-    return points.length >= 3 ? points : null;
-  }, [allNodes, rebarAxis, rebarPhase, rebarStart]);
+    return boundary.segments.length ? boundary.segments : null;
+  }, [allNodes, elements, rebarAxis, rebarPhase, rebarStart]);
 
   const resetWorkflow = useCallback((nodes: ModelNode[], bounds: Bounds, nextElements: ModelElement[] = []) => {
     setAllNodes(nodes);
@@ -2102,7 +2108,7 @@ export default function ModelViewer() {
           rebarMode={activeTab === "rebar"}
           rebarRuns={rebarRuns}
           rebarGuideLine={pendingRebarLine ? rebarGuideLine : null}
-          rebarOuterOutline={rebarOuterOutline}
+          rebarOuterEdges={rebarOuterEdges}
           selectedRebarEdgeIndex={selectedRebarEdgeIndex}
           rebarEdgeSelectionMode={
             activeTab === "rebar" &&
