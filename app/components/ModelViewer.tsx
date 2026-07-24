@@ -1578,6 +1578,7 @@ export default function ModelViewer() {
           }
           tolerance={tolerance}
           elementSurfaces={elementSkin.surfaces}
+          elements={elements}
           showElementSkin={showElementSkin}
           slicingMode={activeTab === "slicing"}
           sliceBounds={currentBounds}

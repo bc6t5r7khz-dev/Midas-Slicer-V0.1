@@ -3,11 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { toLocal, transformPlane } from "../lib/coordinateSystem";
 import type {
   Bounds,
   LocalBasis,
   ElementSurface,
+  ModelElement,
   ModelNode,
   SliceRanges,
   Vec3,
@@ -40,6 +44,7 @@ type Props = {
   pickTarget: PickTarget;
   tolerance: number;
   elementSurfaces: ElementSurface[];
+  elements: ModelElement[];
   showElementSkin: boolean;
   elementEditMode: boolean;
   selectedElementIds: number[];
@@ -168,14 +173,214 @@ function triangulatePolygon(vertices: Vec3[], offset: Vec3) {
 function disposeGroup(group: THREE.Group) {
   for (const child of [...group.children]) {
     group.remove(child);
-    if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+    if (
+      "geometry" in child &&
+      "material" in child &&
+      child.geometry instanceof THREE.BufferGeometry
+    ) {
       child.geometry.dispose();
-      const materials = Array.isArray(child.material)
-        ? child.material
-        : [child.material];
+      const sourceMaterial = child.material as
+        | THREE.Material
+        | THREE.Material[];
+      const materials = Array.isArray(sourceMaterial)
+        ? sourceMaterial
+        : [sourceMaterial];
       materials.forEach((material) => material.dispose());
     }
   }
+}
+
+type CellFace = {
+  vertices: Vec3[];
+  cap: boolean;
+};
+
+type ClipPlane = {
+  normal: Vec3;
+  constant: number;
+};
+
+function solidFaces(size: number): number[][] {
+  if (size === 4) return [[0, 1, 2], [0, 3, 1], [1, 3, 2], [2, 3, 0]];
+  if (size === 6) {
+    return [
+      [0, 2, 1],
+      [3, 4, 5],
+      [0, 1, 4, 3],
+      [1, 2, 5, 4],
+      [2, 0, 3, 5],
+    ];
+  }
+  if (size === 8) {
+    return [
+      [0, 3, 2, 1],
+      [4, 5, 6, 7],
+      [0, 1, 5, 4],
+      [1, 2, 6, 5],
+      [2, 3, 7, 6],
+      [3, 0, 4, 7],
+    ];
+  }
+  return [];
+}
+
+const planeDistance = (plane: ClipPlane, point: Vec3) =>
+  plane.normal.x * point.x +
+  plane.normal.y * point.y +
+  plane.normal.z * point.z +
+  plane.constant;
+
+function clipCellFaces(
+  faces: CellFace[],
+  plane: ClipPlane,
+  epsilon: number,
+): CellFace[] {
+  const clipped: CellFace[] = [];
+  const capPoints: Vec3[] = [];
+
+  for (const face of faces) {
+    const vertices: Vec3[] = [];
+    for (
+      let currentIndex = 0, previousIndex = face.vertices.length - 1;
+      currentIndex < face.vertices.length;
+      previousIndex = currentIndex, currentIndex += 1
+    ) {
+      const previous = face.vertices[previousIndex];
+      const current = face.vertices[currentIndex];
+      const previousDistance = planeDistance(plane, previous);
+      const currentDistance = planeDistance(plane, current);
+      const previousInside = previousDistance >= -epsilon;
+      const currentInside = currentDistance >= -epsilon;
+
+      if (previousInside !== currentInside) {
+        const amount =
+          previousDistance / (previousDistance - currentDistance);
+        const intersection = {
+          x: previous.x + (current.x - previous.x) * amount,
+          y: previous.y + (current.y - previous.y) * amount,
+          z: previous.z + (current.z - previous.z) * amount,
+        };
+        vertices.push(intersection);
+        capPoints.push(intersection);
+      }
+      if (currentInside) vertices.push(current);
+    }
+    if (vertices.length >= 3) clipped.push({ ...face, vertices });
+  }
+
+  const unique = capPoints.filter(
+    (point, index) =>
+      capPoints.findIndex(
+        (candidate) =>
+          (candidate.x - point.x) ** 2 +
+            (candidate.y - point.y) ** 2 +
+            (candidate.z - point.z) ** 2 <
+          epsilon ** 2,
+      ) === index,
+  );
+  if (unique.length >= 3) {
+    const center = unique.reduce(
+      (sum, point) => ({
+        x: sum.x + point.x / unique.length,
+        y: sum.y + point.y / unique.length,
+        z: sum.z + point.z / unique.length,
+      }),
+      { x: 0, y: 0, z: 0 },
+    );
+    const normal = new THREE.Vector3(
+      plane.normal.x,
+      plane.normal.y,
+      plane.normal.z,
+    ).normalize();
+    const helper =
+      Math.abs(normal.z) < 0.8
+        ? new THREE.Vector3(0, 0, 1)
+        : new THREE.Vector3(0, 1, 0);
+    const u = new THREE.Vector3().crossVectors(helper, normal).normalize();
+    const v = new THREE.Vector3().crossVectors(normal, u).normalize();
+    unique.sort((a, b) => {
+      const ax = (a.x - center.x) * u.x +
+        (a.y - center.y) * u.y +
+        (a.z - center.z) * u.z;
+      const ay = (a.x - center.x) * v.x +
+        (a.y - center.y) * v.y +
+        (a.z - center.z) * v.z;
+      const bx = (b.x - center.x) * u.x +
+        (b.y - center.y) * u.y +
+        (b.z - center.z) * u.z;
+      const by = (b.x - center.x) * v.x +
+        (b.y - center.y) * v.y +
+        (b.z - center.z) * v.z;
+      return Math.atan2(ay, ax) - Math.atan2(by, bx);
+    });
+    clipped.push({ vertices: unique, cap: true });
+  }
+  return clipped;
+}
+
+function clippedSolidBuffers(
+  elements: ModelElement[],
+  nodes: ModelNode[],
+  basis: LocalBasis | null,
+  slice: SliceRanges,
+  offset: Vec3,
+) {
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const planes: ClipPlane[] = [
+    { normal: { x: 1, y: 0, z: 0 }, constant: -slice.x[0] },
+    { normal: { x: -1, y: 0, z: 0 }, constant: slice.x[1] },
+    { normal: { x: 0, y: 1, z: 0 }, constant: -slice.y[0] },
+    { normal: { x: 0, y: -1, z: 0 }, constant: slice.y[1] },
+    { normal: { x: 0, y: 0, z: 1 }, constant: -slice.z[0] },
+    { normal: { x: 0, y: 0, z: -1 }, constant: slice.z[1] },
+  ];
+  const span = Math.max(
+    slice.x[1] - slice.x[0],
+    slice.y[1] - slice.y[0],
+    slice.z[1] - slice.z[0],
+    1,
+  );
+  const epsilon = span * 1e-8;
+  const positions: number[] = [];
+  const thinEdges: number[] = [];
+  const cutEdges: number[] = [];
+
+  for (const element of elements) {
+    if (element.type !== "SOLID") continue;
+    const sourceVertices = element.nodeIds.map((id) => {
+      const node = nodeMap.get(id);
+      if (!node) return null;
+      return basis ? toLocal(node.global, basis) : node.global;
+    });
+    if (sourceVertices.some((point) => !point)) continue;
+    let faces: CellFace[] = solidFaces(element.nodeIds.length).map((indices) => ({
+      vertices: indices.map((index) => sourceVertices[index] as Vec3),
+      cap: false,
+    }));
+    for (const plane of planes) {
+      faces = clipCellFaces(faces, plane, epsilon);
+      if (!faces.length) break;
+    }
+
+    for (const face of faces) {
+      const displayed = face.vertices.map((vertex) => ({
+        x: vertex.x - offset.x,
+        y: vertex.y - offset.y,
+        z: vertex.z - offset.z,
+      }));
+      for (let index = 1; index < displayed.length - 1; index += 1) {
+        [displayed[0], displayed[index], displayed[index + 1]].forEach(
+          (point) => positions.push(point.x, point.y, point.z),
+        );
+      }
+      displayed.forEach((point, index) => {
+        const next = displayed[(index + 1) % displayed.length];
+        const target = face.cap ? cutEdges : thinEdges;
+        target.push(point.x, point.y, point.z, next.x, next.y, next.z);
+      });
+    }
+  }
+  return { positions, thinEdges, cutEdges };
 }
 
 function fitCamera(
@@ -225,6 +430,7 @@ export default function PointCloudViewport({
   pickTarget,
   tolerance,
   elementSurfaces,
+  elements,
   showElementSkin,
   elementEditMode,
   selectedElementIds,
@@ -961,6 +1167,71 @@ export default function PointCloudViewport({
     state.elementGroup.visible = renderElementSkin;
     if (!renderElementSkin || !elementSurfaces.length) return;
 
+    if (
+      slicingMode &&
+      elements.some((element) => element.type === "SOLID")
+    ) {
+      const buffers = clippedSolidBuffers(
+        elements,
+        allNodes,
+        basis,
+        slice,
+        displayOffset,
+      );
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(buffers.positions, 3),
+      );
+      geometry.computeVertexNormals();
+      const mesh = new THREE.Mesh(
+        geometry,
+        new THREE.MeshBasicMaterial({
+          color: 0xc8d0d3,
+          polygonOffset: true,
+          polygonOffsetFactor: 1,
+          polygonOffsetUnits: 1,
+          side: THREE.DoubleSide,
+        }),
+      );
+      state.elementGroup.add(mesh);
+
+      if (buffers.thinEdges.length) {
+        const thinGeometry = new THREE.BufferGeometry();
+        thinGeometry.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(buffers.thinEdges, 3),
+        );
+        state.elementGroup.add(
+          new THREE.LineSegments(
+            thinGeometry,
+            new THREE.LineBasicMaterial({
+              color: 0x05090c,
+              opacity: 0.72,
+              transparent: true,
+            }),
+          ),
+        );
+      }
+
+      if (buffers.cutEdges.length) {
+        const cutGeometry = new LineSegmentsGeometry();
+        cutGeometry.setPositions(buffers.cutEdges);
+        const cutMaterial = new LineMaterial({
+          color: 0x05090c,
+          linewidth: 3,
+          resolution: new THREE.Vector2(
+            state.renderer.domElement.clientWidth,
+            state.renderer.domElement.clientHeight,
+          ),
+        });
+        const cuts = new LineSegments2(cutGeometry, cutMaterial);
+        cuts.computeLineDistances();
+        state.elementGroup.add(cuts);
+      }
+      return;
+    }
+
     const toDisplay = (point: Vec3) => (basis ? toLocal(point, basis) : point);
     const trianglePositions: number[] = [];
     const triangleColors: number[] = [];
@@ -1134,11 +1405,13 @@ export default function PointCloudViewport({
       );
     }
   }, [
+    allNodes,
     basis,
     displayOffset.x,
     displayOffset.y,
     displayOffset.z,
     elementSurfaces,
+    elements,
     elementEditMode,
     selectedElementIds,
     showElementSkin,
