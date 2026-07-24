@@ -62,4 +62,21 @@ export type Polyhedron = {
   vertices: Vec3[];
 };
 
-export type WorkflowTab = "volume" | "coordinates" | "slicing";
+export type RebarLine = {
+  id: string;
+  points: Vec3[];
+  closed?: boolean;
+};
+
+export type RebarRun = {
+  id: string;
+  name: string;
+  axis: Axis;
+  start: number;
+  end: number;
+  spacingInches: number;
+  positions: number[];
+  lines: RebarLine[];
+};
+
+export type WorkflowTab = "volume" | "coordinates" | "slicing" | "rebar";

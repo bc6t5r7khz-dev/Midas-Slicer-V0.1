@@ -1,6 +1,7 @@
 import type {
   LocalBasis,
   ModelElement,
+  RebarRun,
   ModelNode,
   SliceRanges,
   VolumeFace,
@@ -28,6 +29,9 @@ export type SavedWorkspace = {
   elements?: ModelElement[];
   showElementSkin?: boolean;
   elementSkinVolume?: boolean;
+  inchesPerModelUnit?: number | null;
+  rebarRuns?: RebarRun[];
+  showConcreteSkin?: boolean;
 };
 
 const DATABASE_NAME = "mct-section-lab";

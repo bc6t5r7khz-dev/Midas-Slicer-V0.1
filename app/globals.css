@@ -235,7 +235,7 @@ button {
 
 .workflow-tabs {
   display: grid;
-  grid-template-columns: 1.35fr 1fr 0.78fr;
+  grid-template-columns: 1.35fr 1fr 0.78fr 0.78fr;
   border-bottom: 1px solid var(--line);
   background: #09131a;
 }
@@ -1054,12 +1054,18 @@ button {
 
 .drop-overlay {
   position: fixed;
-  inset: 68px 0 0 0;
+  top: 82px;
+  right: 22px;
+  width: 290px;
+  height: 150px;
   z-index: 40;
   display: grid;
   place-items: center;
   border: 2px dashed var(--cyan);
+  border-radius: 8px;
   background: #061017e8;
+  box-shadow: 0 18px 50px #0009;
+  pointer-events: none;
 }
 
 .drop-overlay > div {
@@ -1079,6 +1085,68 @@ button {
 
 .drop-overlay small {
   color: var(--muted);
+}
+
+.scale-definition,
+.rebar-step,
+.manual-range-values {
+  display: grid;
+  gap: 10px;
+}
+
+.scale-definition label,
+.rebar-step label,
+.manual-range-values label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.scale-definition input,
+.rebar-step input,
+.manual-range-values input {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #08141b;
+  color: var(--text);
+  padding: 8px;
+  font: 12px Consolas, monospace;
+}
+
+.manual-range-values {
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: 9px;
+}
+
+.axis-choice {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.axis-choice button {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  padding: 7px;
+  cursor: pointer;
+}
+
+.axis-choice button.active {
+  border-color: var(--cyan);
+  background: #12333e;
+  color: var(--cyan);
+}
+
+.skin-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .error-toast {

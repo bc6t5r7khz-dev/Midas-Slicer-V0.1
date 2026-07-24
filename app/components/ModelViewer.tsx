@@ -9,6 +9,7 @@ import {
 import { autoHullFaces } from "../lib/autoVolume";
 import { parseMctModel } from "../lib/mctParser";
 import { buildElementSkin } from "../lib/elementSkin";
+import { createCoverOutline, distributeBars } from "../lib/rebarGeometry";
 import { createSampleMct } from "../lib/sampleModel";
 import { smartFaceFromSeed } from "../lib/smartSelect";
 import {
@@ -23,9 +24,12 @@ import {
   type SavedWorkspace,
 } from "../lib/workspaceStorage";
 import type {
+  Axis,
   Bounds,
   LocalBasis,
   ModelElement,
+  RebarLine,
+  RebarRun,
   ModelNode,
   SliceRanges,
   Vec3,
@@ -45,11 +49,13 @@ import {
 } from "../lib/volumeGeometry";
 import PointCloudViewport from "./PointCloudViewport";
 import RangeControl from "./RangeControl";
+import InchRangeControl from "./InchRangeControl";
 
 const TABS: Array<{ id: WorkflowTab; label: string; number: string }> = [
   { id: "volume", label: "Volume Definition", number: "01" },
   { id: "coordinates", label: "Coordinates", number: "02" },
   { id: "slicing", label: "Slicing", number: "03" },
+  { id: "rebar", label: "Rebar", number: "04" },
 ];
 
 const formatCoordinate = (value: number) =>
@@ -121,6 +127,25 @@ export default function ModelViewer() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [scaleDefining, setScaleDefining] = useState(false);
+  const [scaleNodeIds, setScaleNodeIds] = useState<number[]>([]);
+  const [scaleDistanceInches, setScaleDistanceInches] = useState(12);
+  const [inchesPerModelUnit, setInchesPerModelUnit] = useState<number | null>(
+    null,
+  );
+  const [rebarRuns, setRebarRuns] = useState<RebarRun[]>([]);
+  const [showConcreteSkin, setShowConcreteSkin] = useState(true);
+  const [rebarPhase, setRebarPhase] = useState<
+    "idle" | "start" | "lines" | "end" | "spacing"
+  >("idle");
+  const [rebarName, setRebarName] = useState("Bar Run 1");
+  const [rebarAxis, setRebarAxis] = useState<Axis>("x");
+  const [rebarStart, setRebarStart] = useState(0);
+  const [rebarEnd, setRebarEnd] = useState(0);
+  const [rebarLines, setRebarLines] = useState<RebarLine[]>([]);
+  const [pendingRebarLine, setPendingRebarLine] =
+    useState<RebarLine | null>(null);
+  const [rebarSpacing, setRebarSpacing] = useState(12);
 
   const tolerance = globalBounds ? modelTolerance(globalBounds) : 1e-6;
   const elementSkin = useMemo(
@@ -213,6 +238,31 @@ export default function ModelViewer() {
     return getBounds(candidates, Boolean(basis));
   }, [allNodes, basis, displayNodes]);
 
+  const rebarGuideLine = useMemo(() => {
+    if (
+      !inchesPerModelUnit ||
+      rebarPhase === "idle" ||
+      rebarPhase === "start"
+    ) {
+      return null;
+    }
+    const points = createCoverOutline(
+      allNodes,
+      rebarAxis,
+      rebarStart,
+      2 / inchesPerModelUnit,
+    );
+    return points.length >= 3
+      ? { id: "cover-guide", points }
+      : null;
+  }, [
+    allNodes,
+    inchesPerModelUnit,
+    rebarAxis,
+    rebarPhase,
+    rebarStart,
+  ]);
+
   const resetWorkflow = useCallback((nodes: ModelNode[], bounds: Bounds, nextElements: ModelElement[] = []) => {
     setAllNodes(nodes);
     setElements(nextElements);
@@ -220,6 +270,11 @@ export default function ModelViewer() {
     setElementSkinVolume(false);
     setElementEditMode(false);
     setSelectedElementIds(new Set());
+    setScaleDefining(false);
+    setScaleNodeIds([]);
+    setInchesPerModelUnit(null);
+    setRebarRuns([]);
+    setRebarPhase("idle");
     setGlobalBounds(bounds);
     setFaces([]);
     setDefiningFaces(false);
@@ -282,6 +337,9 @@ export default function ModelViewer() {
         setElements(saved.elements ?? []);
         setShowElementSkin(saved.showElementSkin ?? Boolean(saved.elements?.length));
         setElementSkinVolume(saved.elementSkinVolume ?? false);
+        setInchesPerModelUnit(saved.inchesPerModelUnit ?? null);
+        setRebarRuns(saved.rebarRuns ?? []);
+        setShowConcreteSkin(saved.showConcreteSkin ?? true);
         setFileName(saved.fileName);
         setGlobalBounds(bounds);
         setFaces(saved.faces);
@@ -342,6 +400,9 @@ export default function ModelViewer() {
         elements,
         showElementSkin,
         elementSkinVolume,
+        inchesPerModelUnit,
+        rebarRuns,
+        showConcreteSkin,
       };
       void saveWorkspace(workspace).catch(() => {
         setError(
@@ -359,15 +420,18 @@ export default function ModelViewer() {
     faces,
     elements,
     elementSkinVolume,
+    inchesPerModelUnit,
     fileName,
     floorFaceId,
     selectedFaceIds,
     selectedNode?.id,
+    rebarRuns,
     smartSelecting,
     smartVariant,
     smartAxis,
     slice,
     showElementSkin,
+    showConcreteSkin,
     volumeConfirmed,
     workspaceReady,
     xDirectionNodeIds,
@@ -582,6 +646,15 @@ export default function ModelViewer() {
     if (!node) return;
     setSelectedNode(node);
 
+    if (activeTab === "coordinates" && scaleDefining) {
+      setScaleNodeIds((current) => {
+        if (current.includes(nodeId)) return current;
+        return current.length >= 2 ? [nodeId] : [...current, nodeId];
+      });
+      setStatus("Scale definition: select two nodes, then enter their distance.");
+      return;
+    }
+
     if (activeTab === "volume" && smartSelecting) {
       try {
         let candidate = smartPreviewFace;
@@ -650,6 +723,49 @@ export default function ModelViewer() {
       );
       if (next.length === 2) applyCoordinateSystem(next);
     }
+  };
+
+  const applyDefinedScale = () => {
+    if (scaleNodeIds.length !== 2 || scaleDistanceInches <= 0) return;
+    const first = allNodes.find((node) => node.id === scaleNodeIds[0]);
+    const second = allNodes.find((node) => node.id === scaleNodeIds[1]);
+    if (!first || !second) return;
+    const delta = subtract(second.global, first.global);
+    const modelDistance = Math.hypot(delta.x, delta.y, delta.z);
+    if (modelDistance <= 1e-12) {
+      setError("The selected scale nodes occupy the same point.");
+      return;
+    }
+    setInchesPerModelUnit(scaleDistanceInches / modelDistance);
+    setScaleDefining(false);
+    setStatus(
+      `Scale defined: ${scaleDistanceInches} in between nodes ${first.id} and ${second.id}.`,
+    );
+  };
+
+  const finishRebarRun = () => {
+    if (!inchesPerModelUnit || !rebarLines.length) return;
+    const run: RebarRun = {
+      id: `rebar-${crypto.randomUUID()}`,
+      name: rebarName.trim() || `Bar Run ${rebarRuns.length + 1}`,
+      axis: rebarAxis,
+      start: rebarStart,
+      end: rebarEnd,
+      spacingInches: rebarSpacing,
+      positions: distributeBars(
+        rebarStart,
+        rebarEnd,
+        rebarSpacing,
+        inchesPerModelUnit,
+      ),
+      lines: rebarLines,
+    };
+    setRebarRuns((current) => [...current, run]);
+    setRebarPhase("idle");
+    setRebarLines([]);
+    setPendingRebarLine(null);
+    setRebarName(`Bar Run ${rebarRuns.length + 2}`);
+    setStatus(`${run.name} created with ${run.positions.length} bars.`);
   };
 
   const handleFacePick = (faceId: string) => {
@@ -958,9 +1074,10 @@ export default function ModelViewer() {
     () => [
       ...draftNodeIds,
       ...xDirectionNodeIds,
+      ...scaleNodeIds,
       ...(editableFace?.nodeIds ?? []),
     ],
-    [draftNodeIds, editableFace, xDirectionNodeIds],
+    [draftNodeIds, editableFace, scaleNodeIds, xDirectionNodeIds],
   );
   const floorOrbitFace = useMemo(() => {
     if (!floorFaceId) return null;
@@ -1048,20 +1165,31 @@ export default function ModelViewer() {
           : xDirectionNodeIds.length < 2
             ? `Pick X direction node ${xDirectionNodeIds.length + 1}/2`
             : "Local coordinates active"
-        : "Adjust X, Y, and Z slice ranges";
+        : activeTab === "slicing"
+          ? "Adjust X, Y, and Z slice ranges"
+          : rebarPhase === "idle"
+            ? "Create or review reinforcement runs"
+            : "Follow the active rebar step";
 
   return (
     <main
       className="app-shell"
       onDragEnter={(event) => {
-        event.preventDefault();
-        setDragging(true);
+        if (Array.from(event.dataTransfer.types).includes("Files")) {
+          event.preventDefault();
+          setDragging(true);
+        }
       }}
-      onDragOver={(event) => event.preventDefault()}
+      onDragOver={(event) => {
+        if (Array.from(event.dataTransfer.types).includes("Files")) {
+          event.preventDefault();
+        }
+      }}
       onDragLeave={(event) => {
         if (event.currentTarget === event.target) setDragging(false);
       }}
       onDrop={(event) => {
+        if (!Array.from(event.dataTransfer.types).includes("Files")) return;
         event.preventDefault();
         setDragging(false);
         const file = event.dataTransfer.files[0];
@@ -1485,6 +1613,50 @@ export default function ModelViewer() {
             >
               Reset coordinates
             </button>
+            <section className="panel-section scale-section">
+              <span className="eyebrow">PHYSICAL UNITS</span>
+              <button
+                className={`button wide ${scaleDefining ? "primary" : ""}`}
+                onClick={() => {
+                  setScaleDefining((value) => !value);
+                  setScaleNodeIds([]);
+                  setStatus("Select two nodes with a known distance.");
+                }}
+              >
+                {scaleDefining ? "Selecting Scale Nodes…" : "Define Scale"}
+              </button>
+              {scaleDefining && (
+                <div className="scale-definition">
+                  <span>
+                    {scaleNodeIds.length}/2 nodes selected
+                  </span>
+                  <label>
+                    Known distance (inches)
+                    <input
+                      type="number"
+                      min={0.001}
+                      step={0.125}
+                      value={scaleDistanceInches}
+                      onChange={(event) =>
+                        setScaleDistanceInches(Number(event.target.value))
+                      }
+                    />
+                  </label>
+                  <button
+                    className="button primary"
+                    disabled={scaleNodeIds.length !== 2}
+                    onClick={applyDefinedScale}
+                  >
+                    Apply Scale
+                  </button>
+                </div>
+              )}
+              {inchesPerModelUnit && (
+                <small>
+                  1 model unit = {inchesPerModelUnit.toFixed(5)} inches
+                </small>
+              )}
+            </section>
           </div>
         )}
 
@@ -1515,6 +1687,318 @@ export default function ModelViewer() {
             >
               Show full extent
             </button>
+          </div>
+        )}
+
+        {activeTab === "rebar" && currentBounds && (
+          <div className="tab-content rebar-content">
+            <section className="panel-section intro compact">
+              <span className="eyebrow">REINFORCEMENT</span>
+              <h1>Lay out bar runs</h1>
+              <p>
+                Sections and spacing use the physical scale defined in
+                Coordinates.
+              </p>
+            </section>
+            {!inchesPerModelUnit ? (
+              <div className="selection-callout">
+                <strong>Scale required</strong>
+                <span>Use Coordinates → Define Scale before creating bars.</span>
+              </div>
+            ) : (
+              <>
+                {(["x", "y", "z"] as const).map((axis) => (
+                  <InchRangeControl
+                    key={axis}
+                    axis={axis.toUpperCase() as "X" | "Y" | "Z"}
+                    bounds={currentBounds[axis]}
+                    value={slice[axis]}
+                    inchesPerUnit={inchesPerModelUnit}
+                    onChange={(value) =>
+                      setSlice((current) => ({ ...current, [axis]: value }))
+                    }
+                  />
+                ))}
+                <label className="skin-toggle">
+                  <input
+                    type="checkbox"
+                    checked={showConcreteSkin}
+                    onChange={(event) =>
+                      setShowConcreteSkin(event.target.checked)
+                    }
+                  />
+                  Show concrete skin
+                </label>
+
+                {rebarPhase === "idle" && (
+                  <button
+                    className="button primary wide"
+                    onClick={() => {
+                      setRebarPhase("start");
+                      setRebarAxis("x");
+                      setRebarStart(currentBounds.x[0]);
+                      setRebarEnd(currentBounds.x[1]);
+                      setRebarLines([]);
+                      setStatus("Choose the start section axis and location.");
+                    }}
+                  >
+                    Create Bar
+                  </button>
+                )}
+
+                {rebarPhase === "start" && (
+                  <section className="rebar-step">
+                    <span className="eyebrow">START SECTION</span>
+                    <div className="axis-choice">
+                      {(["x", "y", "z"] as const).map((axis) => (
+                        <button
+                          key={axis}
+                          className={rebarAxis === axis ? "active" : ""}
+                          onClick={() => {
+                            setRebarAxis(axis);
+                            setRebarStart(currentBounds[axis][0]);
+                            setRebarEnd(currentBounds[axis][1]);
+                          }}
+                        >
+                          {axis.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
+                    <label>
+                      Position (in)
+                      <input
+                        type="number"
+                        min={0}
+                        max={
+                          (currentBounds[rebarAxis][1] -
+                            currentBounds[rebarAxis][0]) *
+                          inchesPerModelUnit
+                        }
+                        step={0.25}
+                        value={Number(
+                          (
+                            (rebarStart -
+                              currentBounds[rebarAxis][0]) *
+                            inchesPerModelUnit
+                          ).toFixed(3),
+                        )}
+                        onChange={(event) =>
+                          setRebarStart(
+                            currentBounds[rebarAxis][0] +
+                              Number(event.target.value) /
+                                inchesPerModelUnit,
+                          )
+                        }
+                      />
+                    </label>
+                    <input
+                      aria-label="Start section position"
+                      type="range"
+                      min={0}
+                      max={
+                        (currentBounds[rebarAxis][1] -
+                          currentBounds[rebarAxis][0]) *
+                        inchesPerModelUnit
+                      }
+                      step={0.25}
+                      value={
+                        (rebarStart - currentBounds[rebarAxis][0]) *
+                        inchesPerModelUnit
+                      }
+                      onChange={(event) =>
+                        setRebarStart(
+                          currentBounds[rebarAxis][0] +
+                            Number(event.target.value) / inchesPerModelUnit,
+                        )
+                      }
+                    />
+                    <button
+                      className="button primary wide"
+                      onClick={() => setRebarPhase("lines")}
+                    >
+                      Confirm Section
+                    </button>
+                  </section>
+                )}
+
+                {rebarPhase === "lines" && (
+                  <section className="rebar-step">
+                    <span className="eyebrow">BAR SHAPE</span>
+                    <div className="selection-callout">
+                      <strong>Outer edge selected</strong>
+                      <span>Gold guide = 2″ clear cover.</span>
+                    </div>
+                    {!pendingRebarLine ? (
+                      <button
+                        className="button wide"
+                        disabled={!rebarGuideLine}
+                        onClick={() =>
+                          setPendingRebarLine({
+                            id: `line-${crypto.randomUUID()}`,
+                            points: [],
+                            closed: false,
+                          })
+                        }
+                      >
+                        Line
+                      </button>
+                    ) : (
+                      <button
+                        className="button primary wide"
+                        disabled={pendingRebarLine.points.length < 2}
+                        onClick={() => {
+                          setRebarLines((current) => [
+                            ...current,
+                            pendingRebarLine,
+                          ]);
+                          setPendingRebarLine(null);
+                        }}
+                      >
+                        Finish Line
+                      </button>
+                    )}
+                    {pendingRebarLine && (
+                      <small>
+                        Click the gold guide to add snapped points ·{" "}
+                        {pendingRebarLine.points.length} selected
+                      </small>
+                    )}
+                    <small>{rebarLines.length} finished line(s)</small>
+                    <button
+                      className="button primary wide"
+                      disabled={!rebarLines.length || Boolean(pendingRebarLine)}
+                      onClick={() => setRebarPhase("end")}
+                    >
+                      Finish Bar
+                    </button>
+                  </section>
+                )}
+
+                {rebarPhase === "end" && (
+                  <section className="rebar-step">
+                    <span className="eyebrow">END SECTION</span>
+                    <label>
+                      Position (in)
+                      <input
+                        type="number"
+                        min={0}
+                        max={
+                          (currentBounds[rebarAxis][1] -
+                            currentBounds[rebarAxis][0]) *
+                          inchesPerModelUnit
+                        }
+                        step={0.25}
+                        value={Number(
+                          (
+                            (rebarEnd - currentBounds[rebarAxis][0]) *
+                            inchesPerModelUnit
+                          ).toFixed(3),
+                        )}
+                        onChange={(event) =>
+                          setRebarEnd(
+                            currentBounds[rebarAxis][0] +
+                              Number(event.target.value) /
+                                inchesPerModelUnit,
+                          )
+                        }
+                      />
+                    </label>
+                    <input
+                      aria-label="End section position"
+                      type="range"
+                      min={0}
+                      max={
+                        (currentBounds[rebarAxis][1] -
+                          currentBounds[rebarAxis][0]) *
+                        inchesPerModelUnit
+                      }
+                      step={0.25}
+                      value={
+                        (rebarEnd - currentBounds[rebarAxis][0]) *
+                        inchesPerModelUnit
+                      }
+                      onChange={(event) =>
+                        setRebarEnd(
+                          currentBounds[rebarAxis][0] +
+                            Number(event.target.value) / inchesPerModelUnit,
+                        )
+                      }
+                    />
+                    <button
+                      className="button primary wide"
+                      onClick={() => setRebarPhase("spacing")}
+                    >
+                      Confirm Section
+                    </button>
+                  </section>
+                )}
+
+                {rebarPhase === "spacing" && (
+                  <section className="rebar-step">
+                    <span className="eyebrow">SPACING</span>
+                    <label>
+                      Run name
+                      <input
+                        value={rebarName}
+                        onChange={(event) => setRebarName(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Bar spacing (in)
+                      <input
+                        type="number"
+                        min={0.01}
+                        step={0.125}
+                        value={rebarSpacing}
+                        onChange={(event) =>
+                          setRebarSpacing(Number(event.target.value))
+                        }
+                      />
+                    </label>
+                    <button
+                      className="button primary wide"
+                      onClick={finishRebarRun}
+                    >
+                      Really Finish Bar
+                    </button>
+                  </section>
+                )}
+
+                {rebarRuns.length > 0 && (
+                  <section className="face-list-section">
+                    <div className="section-heading">
+                      <span className="eyebrow">BAR RUNS</span>
+                      <strong>{rebarRuns.length}</strong>
+                    </div>
+                    <div className="face-list">
+                      {rebarRuns.map((run) => (
+                        <label key={run.id}>
+                          <span>
+                            <strong>{run.name}</strong>
+                            <small>
+                              {run.positions.length} bars ·{" "}
+                              {run.spacingInches}" nominal
+                            </small>
+                          </span>
+                          <button
+                            className="danger-button"
+                            onClick={() =>
+                              setRebarRuns((current) =>
+                                current.filter(
+                                  (candidate) => candidate.id !== run.id,
+                                ),
+                              )
+                            }
+                          >
+                            Delete
+                          </button>
+                        </label>
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </>
+            )}
           </div>
         )}
 
@@ -1582,6 +2066,37 @@ export default function ModelViewer() {
           showElementSkin={showElementSkin}
           slicingMode={activeTab === "slicing"}
           sliceBounds={currentBounds}
+          rebarMode={activeTab === "rebar"}
+          rebarRuns={rebarRuns}
+          rebarGuideLine={rebarGuideLine}
+          pendingRebarLine={pendingRebarLine}
+          rebarAxis={rebarAxis}
+          rebarSection={
+            activeTab !== "rebar" || rebarPhase === "idle"
+              ? null
+              : rebarPhase === "end" || rebarPhase === "spacing"
+                ? rebarEnd
+                : rebarStart
+          }
+          showConcreteSkin={showConcreteSkin}
+          rebarDrawing={Boolean(pendingRebarLine)}
+          onPickRebarPoint={(point) =>
+            setPendingRebarLine((current) => {
+              if (!current) return current;
+              const previous = current.points[current.points.length - 1];
+              if (
+                previous &&
+                Math.hypot(
+                  previous.x - point.x,
+                  previous.y - point.y,
+                  previous.z - point.z,
+                ) < tolerance
+              ) {
+                return current;
+              }
+              return { ...current, points: [...current.points, point] };
+            })
+          }
           elementEditMode={elementEditMode}
           selectedElementIds={[...selectedElementIds]}
           onPickElement={toggleElementSelection}

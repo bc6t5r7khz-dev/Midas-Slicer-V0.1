@@ -12,6 +12,8 @@ import type {
   LocalBasis,
   ElementSurface,
   ModelElement,
+  RebarLine,
+  RebarRun,
   ModelNode,
   SliceRanges,
   Vec3,
@@ -51,6 +53,15 @@ type Props = {
   onPickElement: (elementId: number) => void;
   slicingMode: boolean;
   sliceBounds: Bounds | null;
+  rebarMode: boolean;
+  rebarRuns: RebarRun[];
+  rebarGuideLine: RebarLine | null;
+  pendingRebarLine: RebarLine | null;
+  rebarAxis: "x" | "y" | "z";
+  rebarSection: number | null;
+  showConcreteSkin: boolean;
+  rebarDrawing: boolean;
+  onPickRebarPoint: (point: Vec3) => void;
   onHover: (payload: {
     node: ModelNode;
     clientX: number;
@@ -73,6 +84,7 @@ type SceneState = {
   faceGroup: THREE.Group;
   elementGroup: THREE.Group;
   grid: THREE.GridHelper;
+  rebarGroup: THREE.Group;
   geometry: THREE.BufferGeometry;
   material: THREE.ShaderMaterial;
   points: THREE.Points;
@@ -186,8 +198,35 @@ function disposeGroup(group: THREE.Group) {
         ? sourceMaterial
         : [sourceMaterial];
       materials.forEach((material) => material.dispose());
+    } else if (child instanceof THREE.Sprite) {
+      child.material.map?.dispose();
+      child.material.dispose();
     }
   }
+}
+
+function createTextSprite(text: string) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 96;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.fillStyle = "rgba(5, 12, 16, 0.82)";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "#f1c36c";
+  context.font = "600 38px Arial";
+  context.textBaseline = "middle";
+  context.fillText(text, 18, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: texture,
+      depthTest: false,
+      transparent: true,
+    }),
+  );
+  sprite.scale.set(12, 2.25, 1);
+  return sprite;
 }
 
 type CellFace = {
@@ -502,6 +541,15 @@ export default function PointCloudViewport({
   onPickElement,
   slicingMode,
   sliceBounds,
+  rebarMode,
+  rebarRuns,
+  rebarGuideLine,
+  pendingRebarLine,
+  rebarAxis,
+  rebarSection,
+  showConcreteSkin,
+  rebarDrawing,
+  onPickRebarPoint,
   onHover,
   onHoverFace,
   onPickNode,
@@ -515,6 +563,7 @@ export default function PointCloudViewport({
   const faceEdgesRef = useRef<THREE.Line[]>([]);
   const elementMeshRef = useRef<THREE.Mesh | null>(null);
   const triangleElementIdsRef = useRef<number[]>([]);
+  const rebarGuideObjectsRef = useRef<THREE.Line[]>([]);
   const fittedNodesRef = useRef<ModelNode[] | null>(null);
   const fittedBasisRef = useRef<LocalBasis | null>(null);
   const nodesRef = useRef(nodes);
@@ -530,6 +579,8 @@ export default function PointCloudViewport({
   const onInsertFaceVertexRef = useRef(onInsertFaceVertex);
   const elementEditModeRef = useRef(elementEditMode);
   const onPickElementRef = useRef(onPickElement);
+  const rebarDrawingRef = useRef(rebarDrawing);
+  const onPickRebarPointRef = useRef(onPickRebarPoint);
   const displayOffsetRef = useRef<Vec3>({ x: 0, y: 0, z: 0 });
   const toleranceRef = useRef(tolerance);
   const [renderError, setRenderError] = useState<string | null>(null);
@@ -547,6 +598,8 @@ export default function PointCloudViewport({
   onInsertFaceVertexRef.current = onInsertFaceVertex;
   elementEditModeRef.current = elementEditMode;
   onPickElementRef.current = onPickElement;
+  rebarDrawingRef.current = rebarDrawing;
+  onPickRebarPointRef.current = onPickRebarPoint;
 
   const displayOffset = useMemo(() => {
     if (basis || !allNodes.length) return { x: 0, y: 0, z: 0 };
@@ -603,6 +656,8 @@ export default function PointCloudViewport({
       scene.add(faceGroup);
       const elementGroup = new THREE.Group();
       scene.add(elementGroup);
+      const rebarGroup = new THREE.Group();
+      scene.add(rebarGroup);
 
       const geometry = new THREE.BufferGeometry();
       const material = new THREE.ShaderMaterial({
@@ -784,6 +839,16 @@ export default function PointCloudViewport({
           orbitDrag.x = event.clientX;
           orbitDrag.y = event.clientY;
           renderer.domElement.style.cursor = "grabbing";
+          onHoverRef.current(null);
+          onHoverFaceRef.current(null);
+          return;
+        }
+        if (rebarDrawingRef.current) {
+          updatePointer(event);
+          const guideHit = raycaster.intersectObjects(
+            rebarGuideObjectsRef.current,
+          )[0];
+          renderer.domElement.style.cursor = guideHit ? "crosshair" : "default";
           onHoverRef.current(null);
           onHoverFaceRef.current(null);
           return;
@@ -999,6 +1064,40 @@ export default function PointCloudViewport({
         }
         updatePointer(event);
 
+        if (rebarDrawingRef.current) {
+          const hit = raycaster.intersectObjects(
+            rebarGuideObjectsRef.current,
+          )[0];
+          if (hit) {
+            const point = {
+              x: hit.point.x + displayOffsetRef.current.x,
+              y: hit.point.y + displayOffsetRef.current.y,
+              z: hit.point.z + displayOffsetRef.current.z,
+            };
+            const guidePoints =
+              (hit.object.userData.guidePoints as Vec3[] | undefined) ?? [];
+            const nearest = guidePoints.reduce<{
+              point: Vec3;
+              distance: number;
+            } | null>((best, candidate) => {
+              const distance = Math.hypot(
+                candidate.x - point.x,
+                candidate.y - point.y,
+                candidate.z - point.z,
+              );
+              return !best || distance < best.distance
+                ? { point: candidate, distance }
+                : best;
+            }, null);
+            onPickRebarPointRef.current(
+              nearest && nearest.distance <= toleranceRef.current * 20
+                ? nearest.point
+                : point,
+            );
+          }
+          return;
+        }
+
         if (elementEditModeRef.current) {
           const hit = elementMeshRef.current
             ? raycaster.intersectObject(elementMeshRef.current)[0]
@@ -1088,6 +1187,7 @@ export default function PointCloudViewport({
         faceGroup,
         elementGroup,
         grid,
+        rebarGroup,
         geometry,
         material,
         points,
@@ -1126,6 +1226,7 @@ export default function PointCloudViewport({
         );
         disposeGroup(faceGroup);
         disposeGroup(elementGroup);
+        disposeGroup(rebarGroup);
         geometry.dispose();
         material.dispose();
         renderer.dispose();
@@ -1145,10 +1246,11 @@ export default function PointCloudViewport({
   useEffect(() => {
     const state = sceneRef.current;
     if (!state) return;
-    state.points.visible = !slicingMode;
-    state.grid.visible = !slicingMode;
-    state.faceGroup.visible = !(slicingMode && elementSurfaces.length > 0);
-  }, [elementSurfaces.length, slicingMode]);
+    const solidView = slicingMode || rebarMode;
+    state.points.visible = !solidView;
+    state.grid.visible = !solidView;
+    state.faceGroup.visible = !(solidView && elementSurfaces.length > 0);
+  }, [elementSurfaces.length, rebarMode, slicingMode]);
 
   useEffect(() => {
     const state = sceneRef.current;
@@ -1228,12 +1330,15 @@ export default function PointCloudViewport({
     disposeGroup(state.elementGroup);
     elementMeshRef.current = null;
     triangleElementIdsRef.current = [];
-    const renderElementSkin = showElementSkin || slicingMode;
+    const solidView = slicingMode || rebarMode;
+    const renderElementSkin = rebarMode
+      ? showConcreteSkin
+      : showElementSkin || slicingMode;
     state.elementGroup.visible = renderElementSkin;
     if (!renderElementSkin || !elementSurfaces.length) return;
 
     if (
-      slicingMode &&
+      solidView &&
       elements.some((element) => element.type === "SOLID")
     ) {
       const buffers = clippedSolidBuffers(
@@ -1326,10 +1431,10 @@ export default function PointCloudViewport({
     const edgePositions: number[] = [];
     const cutEdgePositions: number[] = [];
     const normalColor = new THREE.Color(
-      slicingMode ? 0xc8d0d3 : elementEditMode ? 0xffbf47 : 0x91afba,
+      solidView ? 0xc8d0d3 : elementEditMode ? 0xffbf47 : 0x91afba,
     );
     const selectedColor = new THREE.Color(0xff4d62);
-    const clippingPlanes = slicingMode
+    const clippingPlanes = solidView
       ? [
           new THREE.Plane(
             new THREE.Vector3(1, 0, 0),
@@ -1358,7 +1463,7 @@ export default function PointCloudViewport({
         ]
       : [];
     const activeCuts =
-      slicingMode && sliceBounds
+      solidView && sliceBounds
         ? clippingPlanes.filter((_, index) => {
             const axis = (["x", "x", "y", "y", "z", "z"] as const)[index];
             const endpoint = index % 2;
@@ -1445,22 +1550,22 @@ export default function PointCloudViewport({
       new THREE.MeshBasicMaterial({
         clippingPlanes,
         vertexColors: true,
-        opacity: slicingMode
+        opacity: solidView
           ? 1
           : elementEditMode
             ? 0.42
             : volumeConfirmed
               ? 0.18
               : 0.1,
-        transparent: !slicingMode,
-        depthWrite: slicingMode,
+        transparent: !solidView,
+        depthWrite: solidView,
         side: THREE.DoubleSide,
       }),
     );
     elementMeshRef.current = elementMesh;
     state.elementGroup.add(elementMesh);
 
-    if (!slicingMode) {
+    if (!solidView) {
       const edgeGeometry = new THREE.BufferGeometry();
       edgeGeometry.setAttribute(
         "position",
@@ -1503,10 +1608,117 @@ export default function PointCloudViewport({
     elementEditMode,
     selectedElementIds,
     showElementSkin,
+    rebarMode,
+    showConcreteSkin,
     slice,
     sliceBounds,
     slicingMode,
     volumeConfirmed,
+  ]);
+
+  useEffect(() => {
+    const state = sceneRef.current;
+    if (!state) return;
+    disposeGroup(state.rebarGroup);
+    rebarGuideObjectsRef.current = [];
+    state.rebarGroup.visible = rebarMode;
+    if (!rebarMode) return;
+
+    const addPolyline = (
+      points: Vec3[],
+      color: number,
+      opacity = 1,
+      closed = true,
+    ) => {
+      if (points.length < 2) return;
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        ...points.map((point) => toThree(point, displayOffset)),
+        ...(closed ? [toThree(points[0], displayOffset)] : []),
+      ]);
+      const line = new THREE.Line(
+          geometry,
+          new THREE.LineBasicMaterial({
+            color,
+            opacity,
+            transparent: opacity < 1,
+          }),
+        );
+      state.rebarGroup.add(line);
+      return line;
+    };
+
+    for (const run of rebarRuns) {
+      for (const position of run.positions) {
+        for (const line of run.lines) {
+          addPolyline(
+            line.points.map((point) => ({ ...point, [run.axis]: position })),
+            0xb84738,
+            1,
+            line.closed ?? false,
+          );
+        }
+      }
+      const firstPoint = run.lines[0]?.points[0];
+      if (firstPoint) {
+        const label = createTextSprite(run.name);
+        if (label) {
+          const position = toThree(
+            { ...firstPoint, [run.axis]: run.start },
+            displayOffset,
+          );
+          label.position.copy(position);
+          state.rebarGroup.add(label);
+        }
+      }
+    }
+    if (rebarGuideLine) {
+      const guide = addPolyline(rebarGuideLine.points, 0xffbf47, 0.8, true);
+      if (guide) {
+        guide.userData.guidePoints = rebarGuideLine.points;
+        rebarGuideObjectsRef.current.push(guide);
+      }
+    }
+    if (pendingRebarLine) {
+      addPolyline(pendingRebarLine.points, 0xdde4e6, 1, false);
+    }
+
+    if (rebarSection !== null && sliceBounds) {
+      const [first, second] =
+        rebarAxis === "x"
+          ? (["y", "z"] as const)
+          : rebarAxis === "y"
+            ? (["x", "z"] as const)
+            : (["x", "y"] as const);
+      const corners = [
+        { [rebarAxis]: rebarSection, [first]: sliceBounds[first][0], [second]: sliceBounds[second][0] },
+        { [rebarAxis]: rebarSection, [first]: sliceBounds[first][1], [second]: sliceBounds[second][0] },
+        { [rebarAxis]: rebarSection, [first]: sliceBounds[first][1], [second]: sliceBounds[second][1] },
+        { [rebarAxis]: rebarSection, [first]: sliceBounds[first][0], [second]: sliceBounds[second][1] },
+      ] as unknown as Vec3[];
+      const geometry = triangulatePolygon(corners, displayOffset);
+      state.rebarGroup.add(
+        new THREE.Mesh(
+          geometry,
+          new THREE.MeshBasicMaterial({
+            color: 0x2f9dff,
+            opacity: 0.2,
+            transparent: true,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+        ),
+      );
+      addPolyline(corners, 0x2f9dff, 0.9);
+    }
+  }, [
+    displayOffset,
+    pendingRebarLine,
+    rebarAxis,
+    rebarGuideLine,
+    rebarMode,
+    rebarRuns,
+    rebarSection,
+    sliceBounds,
   ]);
 
   useEffect(() => {
