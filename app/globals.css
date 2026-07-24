@@ -431,6 +431,61 @@ button {
   margin-bottom: 10px;
 }
 
+.bar-run-list {
+  display: grid;
+  max-height: 230px;
+  overflow-y: auto;
+}
+
+.bar-run-list > button {
+  width: 100%;
+  padding: 11px 12px;
+  border: 0;
+  border-bottom: 1px solid #182a34;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bar-run-list > button:last-child {
+  border-bottom: 0;
+}
+
+.bar-run-list > button:hover {
+  background: #10242e;
+}
+
+.bar-run-list > button.selected {
+  background: #342a16;
+  box-shadow: inset 3px 0 0 var(--amber);
+}
+
+.bar-run-list strong,
+.bar-run-list small {
+  display: block;
+}
+
+.bar-run-list strong {
+  color: inherit;
+  font-size: 11px;
+}
+
+.bar-run-list small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.bar-run-delete {
+  margin: 12px !important;
+}
+
+.bar-run-delete:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .volume-actions {
   padding: 17px 22px 12px;
 }
@@ -1147,6 +1202,42 @@ button {
   gap: 8px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.range-with-markers {
+  position: relative;
+  padding-top: 13px;
+}
+
+.range-with-markers > input {
+  width: 100%;
+}
+
+.section-markers {
+  position: absolute;
+  top: -3px;
+  right: 8px;
+  left: 8px;
+  height: 16px;
+  pointer-events: none;
+}
+
+.section-markers button {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--amber);
+  font-size: 11px;
+  line-height: 1;
+  transform: translateX(-50%);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.section-markers button:hover {
+  color: #ffe09b;
+  transform: translateX(-50%) scale(1.25);
 }
 
 .error-toast {
