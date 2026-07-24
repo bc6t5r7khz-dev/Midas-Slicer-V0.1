@@ -341,8 +341,8 @@ export default function PointCloudViewport({
       } | null = null;
       let panDrag: {
         pointerId: number;
-        x: number;
-        y: number;
+        anchor: THREE.Vector3;
+        plane: THREE.Plane;
       } | null = null;
       let suppressNextClick = false;
       let pointerStart: { x: number; y: number } | null = null;
@@ -444,19 +444,20 @@ export default function PointCloudViewport({
         controls.update();
       };
 
-      const panInScreenSpace = (deltaX: number, deltaY: number) => {
-        const distance = camera.position.distanceTo(controls.target);
-        const worldPerPixel =
-          (2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) /
-          Math.max(renderer.domElement.clientHeight, 1);
-        const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
-        const up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
-        const translation = right
-          .multiplyScalar(-deltaX * worldPerPixel)
-          .add(up.multiplyScalar(deltaY * worldPerPixel));
+      const panToPointer = (event: PointerEvent) => {
+        if (!panDrag) return;
+        camera.updateMatrixWorld(true);
+        updatePointer(event);
+        const current = raycaster.ray.intersectPlane(
+          panDrag.plane,
+          new THREE.Vector3(),
+        );
+        if (!current) return;
+        const translation = panDrag.anchor.clone().sub(current);
         camera.position.add(translation);
         controls.target.add(translation);
         camera.lookAt(controls.target);
+        camera.updateMatrixWorld(true);
         controls.update();
       };
 
@@ -471,12 +472,7 @@ export default function PointCloudViewport({
           suppressNextClick = true;
         }
         if (panDrag) {
-          panInScreenSpace(
-            event.clientX - panDrag.x,
-            event.clientY - panDrag.y,
-          );
-          panDrag.x = event.clientX;
-          panDrag.y = event.clientY;
+          panToPointer(event);
           renderer.domElement.style.cursor = "move";
           onHoverRef.current(null);
           onHoverFaceRef.current(null);
@@ -556,11 +552,19 @@ export default function PointCloudViewport({
 
       const handlePointerDown = (event: PointerEvent) => {
         if (event.button === 1) {
-          panDrag = {
-            pointerId: event.pointerId,
-            x: event.clientX,
-            y: event.clientY,
-          };
+          camera.updateMatrixWorld(true);
+          updatePointer(event);
+          const viewNormal = camera.getWorldDirection(new THREE.Vector3());
+          const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+            viewNormal,
+            controls.target,
+          );
+          const anchor = raycaster.ray.intersectPlane(
+            plane,
+            new THREE.Vector3(),
+          );
+          if (!anchor) return;
+          panDrag = { pointerId: event.pointerId, anchor, plane };
           renderer.domElement.setPointerCapture(event.pointerId);
           event.preventDefault();
           return;
