@@ -51,7 +51,6 @@ type Props = {
     edgeIndex: number,
     nodeId: number,
   ) => void;
-  onCycleSmartAxis?: () => void;
 };
 
 type SceneState = {
@@ -220,7 +219,6 @@ export default function PointCloudViewport({
   onPickFace,
   onRemoveFaceVertex,
   onInsertFaceVertex,
-  onCycleSmartAxis,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SceneState | null>(null);
@@ -239,7 +237,6 @@ export default function PointCloudViewport({
   const onPickFaceRef = useRef(onPickFace);
   const onRemoveFaceVertexRef = useRef(onRemoveFaceVertex);
   const onInsertFaceVertexRef = useRef(onInsertFaceVertex);
-  const onCycleSmartAxisRef = useRef(onCycleSmartAxis);
   const displayOffsetRef = useRef<Vec3>({ x: 0, y: 0, z: 0 });
   const toleranceRef = useRef(tolerance);
   const [renderError, setRenderError] = useState<string | null>(null);
@@ -255,7 +252,6 @@ export default function PointCloudViewport({
   onPickFaceRef.current = onPickFace;
   onRemoveFaceVertexRef.current = onRemoveFaceVertex;
   onInsertFaceVertexRef.current = onInsertFaceVertex;
-  onCycleSmartAxisRef.current = onCycleSmartAxis;
 
   const displayOffset = useMemo(() => {
     if (basis || !allNodes.length) return { x: 0, y: 0, z: 0 };
@@ -298,7 +294,7 @@ export default function PointCloudViewport({
       controls.zoomSpeed = 0.9;
       controls.zoomToCursor = true;
       controls.mouseButtons.LEFT = null as unknown as THREE.MOUSE;
-      controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
+      controls.mouseButtons.MIDDLE = null as unknown as THREE.MOUSE;
       controls.mouseButtons.RIGHT = null as unknown as THREE.MOUSE;
 
       const grid = new THREE.GridHelper(240, 24, 0x254255, 0x142835);
@@ -339,6 +335,11 @@ export default function PointCloudViewport({
       } | null = null;
       let hoveredEdge: THREE.Line | null = null;
       let orbitDrag: {
+        pointerId: number;
+        x: number;
+        y: number;
+      } | null = null;
+      let panDrag: {
         pointerId: number;
         x: number;
         y: number;
@@ -439,6 +440,22 @@ export default function PointCloudViewport({
         controls.update();
       };
 
+      const panInScreenSpace = (deltaX: number, deltaY: number) => {
+        const distance = camera.position.distanceTo(controls.target);
+        const worldPerPixel =
+          (2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) /
+          Math.max(renderer.domElement.clientHeight, 1);
+        const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
+        const up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
+        const translation = right
+          .multiplyScalar(-deltaX * worldPerPixel)
+          .add(up.multiplyScalar(deltaY * worldPerPixel));
+        camera.position.add(translation);
+        controls.target.add(translation);
+        camera.lookAt(controls.target);
+        controls.update();
+      };
+
       const handleMove = (event: PointerEvent) => {
         if (
           pointerStart &&
@@ -448,6 +465,18 @@ export default function PointCloudViewport({
           ) > 4
         ) {
           suppressNextClick = true;
+        }
+        if (panDrag) {
+          panInScreenSpace(
+            event.clientX - panDrag.x,
+            event.clientY - panDrag.y,
+          );
+          panDrag.x = event.clientX;
+          panDrag.y = event.clientY;
+          renderer.domElement.style.cursor = "move";
+          onHoverRef.current(null);
+          onHoverFaceRef.current(null);
+          return;
         }
         if (orbitDrag && !edgeDrag) {
           rotateWithSwappedAxes(
@@ -523,12 +552,13 @@ export default function PointCloudViewport({
 
       const handlePointerDown = (event: PointerEvent) => {
         if (event.button === 1) {
+          panDrag = {
+            pointerId: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+          };
+          renderer.domElement.setPointerCapture(event.pointerId);
           event.preventDefault();
-          return;
-        }
-        if (event.button === 3 && onCycleSmartAxisRef.current) {
-          event.preventDefault();
-          onCycleSmartAxisRef.current();
           return;
         }
         if (event.button === 0) {
@@ -581,6 +611,14 @@ export default function PointCloudViewport({
 
       const handlePointerUp = (event: PointerEvent) => {
         if (event.button === 0) pointerStart = null;
+        if (panDrag && event.button === 1) {
+          panDrag = null;
+          if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+            renderer.domElement.releasePointerCapture(event.pointerId);
+          }
+          event.preventDefault();
+          return;
+        }
         if (orbitDrag && event.button === 0) {
           orbitDrag = null;
           if (renderer.domElement.hasPointerCapture(event.pointerId)) {
@@ -611,6 +649,7 @@ export default function PointCloudViewport({
       const handlePointerCancel = (event: PointerEvent) => {
         pointerStart = null;
         orbitDrag = null;
+        panDrag = null;
         if (edgeDrag) {
           scene.remove(edgeDrag.preview);
           edgeDrag.preview.geometry.dispose();
@@ -658,7 +697,7 @@ export default function PointCloudViewport({
       };
 
       const preventAuxiliaryClick = (event: MouseEvent) => {
-        if (event.button === 1 || event.button === 3) event.preventDefault();
+        if (event.button === 1) event.preventDefault();
       };
 
       renderer.domElement.addEventListener("pointermove", handleMove);

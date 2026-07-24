@@ -848,11 +848,14 @@ export default function ModelViewer() {
     ],
     [draftNodeIds, editableFace, xDirectionNodeIds],
   );
-  const floorOrbitTarget = useMemo(() => {
+  const floorOrbitFace = useMemo(() => {
     if (!floorFaceId) return null;
-    const floor = faces.find((face) => face.id === floorFaceId);
-    return floor ? centroid(floor.vertices) : null;
+    return faces.find((face) => face.id === floorFaceId) ?? null;
   }, [faces, floorFaceId]);
+  const floorOrbitTarget = useMemo(
+    () => (floorOrbitFace ? centroid(floorOrbitFace.vertices) : null),
+    [floorOrbitFace],
+  );
 
   const activateSmartSelect = (
     variant: "classic" | "axis" | "local" | "full",
@@ -865,22 +868,52 @@ export default function ModelViewer() {
     setVolumeConfirmed(false);
     const descriptions = {
       classic: "Hover an exterior connected planar patch, then click.",
-      axis: `Tracing the complete local ${smartAxis.toUpperCase()} coordinate plane. Mouse 4 cycles axes.`,
+      axis: `Tracing the complete local ${smartAxis.toUpperCase()} coordinate plane. Arrow keys cycle axes.`,
       local: "Hover a node to fit a compact local tangent patch.",
       full: "Hover a node to fit and trace its complete matching plane.",
     };
     setStatus(next ? descriptions[variant] : "Smart Select ended.");
   };
 
-  const cycleSmartAxis = useCallback(() => {
+  const cycleSmartAxis = useCallback((direction: 1 | -1 = 1) => {
     setSmartAxis((current) => {
-      const next = current === "x" ? "y" : current === "y" ? "z" : "x";
+      const axes: SmartAxis[] = ["x", "y", "z"];
+      const next =
+        axes[(axes.indexOf(current) + direction + axes.length) % axes.length];
       setStatus(
         `Smart Select 1 now traces the local ${next.toUpperCase()} plane.`,
       );
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    if (
+      activeTab !== "volume" ||
+      !smartSelecting ||
+      smartVariant !== "axis"
+    ) {
+      return;
+    }
+    const handleAxisKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.matches("input, textarea, select, [contenteditable='true']")) {
+        return;
+      }
+      if (event.code === "ArrowRight" || event.code === "ArrowUp") {
+        event.preventDefault();
+        cycleSmartAxis(1);
+      } else if (
+        event.code === "ArrowLeft" ||
+        event.code === "ArrowDown"
+      ) {
+        event.preventDefault();
+        cycleSmartAxis(-1);
+      }
+    };
+    window.addEventListener("keydown", handleAxisKey);
+    return () => window.removeEventListener("keydown", handleAxisKey);
+  }, [activeTab, cycleSmartAxis, smartSelecting, smartVariant]);
 
   const instruction =
     activeTab === "volume"
@@ -889,7 +922,7 @@ export default function ModelViewer() {
         : smartSelecting
           ? smartPreviewFace
             ? smartVariant === "axis"
-              ? `Click to add local ${smartAxis.toUpperCase()} plane · Mouse 4 changes axis`
+              ? `Click to add local ${smartAxis.toUpperCase()} plane · Arrow keys change axis`
               : "Click to add the highlighted face"
             : "Hover a node to preview this method"
           : "Begin, Smart Select, or Auto-Define"
@@ -1029,7 +1062,7 @@ export default function ModelViewer() {
                   smartSelecting && smartVariant === "axis" ? "primary" : ""
                 }`}
                 onClick={() => activateSmartSelect("axis")}
-                title="Complete local coordinate plane; Mouse 4 cycles X, Y, and Z"
+                title="Complete local coordinate plane; arrow keys cycle X, Y, and Z"
               >
                 Smart Select 1 · {smartAxis.toUpperCase()}
               </button>
@@ -1088,7 +1121,7 @@ export default function ModelViewer() {
                   {smartVariant === "classic"
                     ? "Exterior plane with connected-region growth"
                     : smartVariant === "axis"
-                      ? "All nodes at one local coordinate · Mouse 4 cycles"
+                      ? "All nodes at one local coordinate · Arrow keys cycle"
                       : smartVariant === "local"
                         ? "Compact tangent fit around the hovered node"
                         : "Local plane fit expanded through the complete model"}
@@ -1332,11 +1365,6 @@ export default function ModelViewer() {
           onPickFace={handleFacePick}
           onRemoveFaceVertex={removeFaceVertex}
           onInsertFaceVertex={insertFaceVertex}
-          onCycleSmartAxis={
-            smartSelecting && smartVariant === "axis"
-              ? cycleSmartAxis
-              : undefined
-          }
         />
 
         <div className="view-hud top-left">
