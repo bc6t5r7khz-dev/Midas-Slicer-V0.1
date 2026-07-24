@@ -1217,7 +1217,7 @@ export default function ModelViewer() {
                 </button>
                 <button
                   className={`button wide ${elementEditMode ? "primary" : ""}`}
-                  disabled={!elementSkin.plateElementCount}
+                  disabled={!elements.length}
                   onClick={() => {
                     setElementEditMode((value) => !value);
                     setSelectedElementIds(new Set());
@@ -1227,7 +1227,7 @@ export default function ModelViewer() {
                     setStatus(
                       elementEditMode
                         ? "Element editing ended."
-                        : "Plate element editing active. Click unwanted planes.",
+                        : "Element editing active. Click an unwanted face.",
                     );
                   }}
                 >
@@ -1240,8 +1240,8 @@ export default function ModelViewer() {
                       {selectedElementIds.size === 1 ? "" : "s"} selected
                     </strong>
                     <span>
-                      Only plate elements are shown. Click a face to toggle its
-                      whole MCT element.
+                      Click a face to toggle its complete source MCT element.
+                      This works for both solid and plate elements.
                     </span>
                     <button
                       className="danger-button"

@@ -948,9 +948,7 @@ export default function PointCloudViewport({
     const trianglePositions: number[] = [];
     const triangleColors: number[] = [];
     const edgePositions: number[] = [];
-    const visibleSurfaces = elementEditMode
-      ? elementSurfaces.filter((surface) => surface.source === "plate")
-      : elementSurfaces;
+    const visibleSurfaces = elementSurfaces;
     const normalColor = new THREE.Color(elementEditMode ? 0xffbf47 : 0x91afba);
     const selectedColor = new THREE.Color(0xff4d62);
     for (const surface of visibleSurfaces) {
