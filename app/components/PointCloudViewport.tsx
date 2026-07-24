@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { toLocal, transformPlane } from "../lib/coordinateSystem";
 import type {
+  Bounds,
   LocalBasis,
   ElementSurface,
   ModelNode,
@@ -43,6 +44,8 @@ type Props = {
   elementEditMode: boolean;
   selectedElementIds: number[];
   onPickElement: (elementId: number) => void;
+  slicingMode: boolean;
+  sliceBounds: Bounds | null;
   onHover: (payload: {
     node: ModelNode;
     clientX: number;
@@ -64,6 +67,7 @@ type SceneState = {
   controls: OrbitControls;
   faceGroup: THREE.Group;
   elementGroup: THREE.Group;
+  grid: THREE.GridHelper;
   geometry: THREE.BufferGeometry;
   material: THREE.ShaderMaterial;
   points: THREE.Points;
@@ -225,6 +229,8 @@ export default function PointCloudViewport({
   elementEditMode,
   selectedElementIds,
   onPickElement,
+  slicingMode,
+  sliceBounds,
   onHover,
   onHoverFace,
   onPickNode,
@@ -301,6 +307,7 @@ export default function PointCloudViewport({
 
       const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 1000000);
       const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.localClippingEnabled = true;
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       host.appendChild(renderer.domElement);
@@ -809,6 +816,7 @@ export default function PointCloudViewport({
         controls,
         faceGroup,
         elementGroup,
+        grid,
         geometry,
         material,
         points,
@@ -862,6 +870,14 @@ export default function PointCloudViewport({
       );
     }
   }, []);
+
+  useEffect(() => {
+    const state = sceneRef.current;
+    if (!state) return;
+    state.points.visible = !slicingMode;
+    state.grid.visible = !slicingMode;
+    state.faceGroup.visible = !(slicingMode && elementSurfaces.length > 0);
+  }, [elementSurfaces.length, slicingMode]);
 
   useEffect(() => {
     const state = sceneRef.current;
@@ -941,27 +957,110 @@ export default function PointCloudViewport({
     disposeGroup(state.elementGroup);
     elementMeshRef.current = null;
     triangleElementIdsRef.current = [];
-    state.elementGroup.visible = showElementSkin;
-    if (!showElementSkin || !elementSurfaces.length) return;
+    const renderElementSkin = showElementSkin || slicingMode;
+    state.elementGroup.visible = renderElementSkin;
+    if (!renderElementSkin || !elementSurfaces.length) return;
 
     const toDisplay = (point: Vec3) => (basis ? toLocal(point, basis) : point);
     const trianglePositions: number[] = [];
     const triangleColors: number[] = [];
     const edgePositions: number[] = [];
-    const visibleSurfaces = elementSurfaces;
-    const normalColor = new THREE.Color(elementEditMode ? 0xffbf47 : 0x91afba);
+    const cutEdgePositions: number[] = [];
+    const normalColor = new THREE.Color(
+      slicingMode ? 0xc8d0d3 : elementEditMode ? 0xffbf47 : 0x91afba,
+    );
     const selectedColor = new THREE.Color(0xff4d62);
-    for (const surface of visibleSurfaces) {
+    const clippingPlanes = slicingMode
+      ? [
+          new THREE.Plane(
+            new THREE.Vector3(1, 0, 0),
+            displayOffset.x - slice.x[0],
+          ),
+          new THREE.Plane(
+            new THREE.Vector3(-1, 0, 0),
+            slice.x[1] - displayOffset.x,
+          ),
+          new THREE.Plane(
+            new THREE.Vector3(0, 1, 0),
+            displayOffset.y - slice.y[0],
+          ),
+          new THREE.Plane(
+            new THREE.Vector3(0, -1, 0),
+            slice.y[1] - displayOffset.y,
+          ),
+          new THREE.Plane(
+            new THREE.Vector3(0, 0, 1),
+            displayOffset.z - slice.z[0],
+          ),
+          new THREE.Plane(
+            new THREE.Vector3(0, 0, -1),
+            slice.z[1] - displayOffset.z,
+          ),
+        ]
+      : [];
+    const activeCuts =
+      slicingMode && sliceBounds
+        ? clippingPlanes.filter((_, index) => {
+            const axis = (["x", "x", "y", "y", "z", "z"] as const)[index];
+            const endpoint = index % 2;
+            const coordinate =
+              endpoint === 0 ? slice[axis][0] : slice[axis][1];
+            const span =
+              sliceBounds[axis][1] - sliceBounds[axis][0];
+            return (
+              Math.abs(coordinate - sliceBounds[axis][endpoint]) >
+              Math.max(Math.abs(span) * 1e-7, 1e-9)
+            );
+          })
+        : [];
+
+    const addCutSegment = (
+      triangle: THREE.Vector3[],
+      plane: THREE.Plane,
+    ) => {
+      const hits: THREE.Vector3[] = [];
+      for (let index = 0; index < 3; index += 1) {
+        const a = triangle[index];
+        const b = triangle[(index + 1) % 3];
+        const da = plane.distanceToPoint(a);
+        const db = plane.distanceToPoint(b);
+        if (Math.abs(da) < 1e-8) hits.push(a.clone());
+        if (da * db < 0) hits.push(a.clone().lerp(b, da / (da - db)));
+      }
+      const unique = hits.filter(
+        (hit, index) =>
+          hits.findIndex(
+            (candidate) => candidate.distanceToSquared(hit) < 1e-14,
+          ) === index,
+      );
+      if (unique.length >= 2) {
+        cutEdgePositions.push(
+          unique[0].x,
+          unique[0].y,
+          unique[0].z,
+          unique[1].x,
+          unique[1].y,
+          unique[1].z,
+        );
+      }
+    };
+
+    for (const surface of elementSurfaces) {
       const vertices = surface.vertices.map(toDisplay);
       for (let index = 1; index < vertices.length - 1; index += 1) {
         const color = selectedElementIds.includes(surface.elementId)
           ? selectedColor
           : normalColor;
-        [vertices[0], vertices[index], vertices[index + 1]].forEach((vertex) => {
-          const point = toThree(vertex, displayOffset);
+        const triangle = [
+          vertices[0],
+          vertices[index],
+          vertices[index + 1],
+        ].map((vertex) => toThree(vertex, displayOffset));
+        triangle.forEach((point) => {
           trianglePositions.push(point.x, point.y, point.z);
           triangleColors.push(color.r, color.g, color.b);
         });
+        activeCuts.forEach((plane) => addCutSegment(triangle, plane));
         triangleElementIdsRef.current.push(surface.elementId);
       }
       vertices.forEach((vertex, index) => {
@@ -983,33 +1082,57 @@ export default function PointCloudViewport({
     );
     meshGeometry.computeVertexNormals();
     const elementMesh = new THREE.Mesh(
-        meshGeometry,
-        new THREE.MeshBasicMaterial({
-          vertexColors: true,
-          opacity: elementEditMode ? 0.42 : volumeConfirmed ? 0.18 : 0.1,
-          transparent: true,
-          depthWrite: false,
-          side: THREE.DoubleSide,
-        }),
-      );
+      meshGeometry,
+      new THREE.MeshBasicMaterial({
+        clippingPlanes,
+        vertexColors: true,
+        opacity: slicingMode
+          ? 1
+          : elementEditMode
+            ? 0.42
+            : volumeConfirmed
+              ? 0.18
+              : 0.1,
+        transparent: !slicingMode,
+        depthWrite: slicingMode,
+        side: THREE.DoubleSide,
+      }),
+    );
     elementMeshRef.current = elementMesh;
     state.elementGroup.add(elementMesh);
 
-    const edgeGeometry = new THREE.BufferGeometry();
-    edgeGeometry.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(edgePositions, 3),
-    );
-    state.elementGroup.add(
-      new THREE.LineSegments(
-        edgeGeometry,
-        new THREE.LineBasicMaterial({
-          color: 0x05090c,
-          opacity: 0.72,
-          transparent: true,
-        }),
-      ),
-    );
+    if (!slicingMode) {
+      const edgeGeometry = new THREE.BufferGeometry();
+      edgeGeometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(edgePositions, 3),
+      );
+      state.elementGroup.add(
+        new THREE.LineSegments(
+          edgeGeometry,
+          new THREE.LineBasicMaterial({
+            color: 0x05090c,
+            opacity: 0.72,
+            transparent: true,
+          }),
+        ),
+      );
+    } else if (cutEdgePositions.length) {
+      const cutGeometry = new THREE.BufferGeometry();
+      cutGeometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(cutEdgePositions, 3),
+      );
+      state.elementGroup.add(
+        new THREE.LineSegments(
+          cutGeometry,
+          new THREE.LineBasicMaterial({
+            clippingPlanes,
+            color: 0x05090c,
+          }),
+        ),
+      );
+    }
   }, [
     basis,
     displayOffset.x,
@@ -1019,6 +1142,9 @@ export default function PointCloudViewport({
     elementEditMode,
     selectedElementIds,
     showElementSkin,
+    slice,
+    sliceBounds,
+    slicingMode,
     volumeConfirmed,
   ]);
 

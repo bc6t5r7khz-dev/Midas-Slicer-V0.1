@@ -7,12 +7,6 @@ type Props = {
   onChange: (value: [number, number]) => void;
 };
 
-const format = (value: number) =>
-  new Intl.NumberFormat("en-US", {
-    maximumFractionDigits: 2,
-    useGrouping: false,
-  }).format(value);
-
 export default function RangeControl({
   axis,
   bounds,
@@ -20,9 +14,10 @@ export default function RangeControl({
   onChange,
 }: Props) {
   const span = bounds[1] - bounds[0] || 1;
-  const step = Math.max(span / 500, 0.000001);
   const left = ((value[0] - bounds[0]) / span) * 100;
   const right = ((value[1] - bounds[0]) / span) * 100;
+  const toCoordinate = (percent: number) =>
+    bounds[0] + (span * percent) / 100;
 
   return (
     <div className="range-control">
@@ -31,7 +26,7 @@ export default function RangeControl({
           <b>{axis}</b> slice
         </span>
         <span className="range-readout">
-          {format(value[0])} — {format(value[1])}
+          {Math.round(left)}/100 — {Math.round(right)}/100
         </span>
       </div>
       <div
@@ -46,23 +41,29 @@ export default function RangeControl({
         <input
           aria-label={`${axis} slice minimum`}
           type="range"
-          min={bounds[0]}
-          max={bounds[1]}
-          step={step}
-          value={value[0]}
+          min={0}
+          max={100}
+          step={1}
+          value={left}
           onChange={(event) =>
-            onChange([Math.min(Number(event.target.value), value[1]), value[1]])
+            onChange([
+              Math.min(toCoordinate(Number(event.target.value)), value[1]),
+              value[1],
+            ])
           }
         />
         <input
           aria-label={`${axis} slice maximum`}
           type="range"
-          min={bounds[0]}
-          max={bounds[1]}
-          step={step}
-          value={value[1]}
+          min={0}
+          max={100}
+          step={1}
+          value={right}
           onChange={(event) =>
-            onChange([value[0], Math.max(Number(event.target.value), value[0])])
+            onChange([
+              value[0],
+              Math.max(toCoordinate(Number(event.target.value)), value[0]),
+            ])
           }
         />
       </div>

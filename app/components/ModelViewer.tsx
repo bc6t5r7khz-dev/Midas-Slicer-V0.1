@@ -899,20 +899,6 @@ export default function ModelViewer() {
     }
   };
 
-  const visibleCount = useMemo(() => {
-    return displayNodes.reduce((count, node) => {
-      const value = node.local ?? node.global;
-      const visible =
-        value.x >= slice.x[0] &&
-        value.x <= slice.x[1] &&
-        value.y >= slice.y[0] &&
-        value.y <= slice.y[1] &&
-        value.z >= slice.z[0] &&
-        value.z <= slice.z[1];
-      return count + (visible ? 1 : 0);
-    }, 0);
-  }, [displayNodes, slice]);
-
   const editableFace = useMemo(() => {
     if (!shapeEditingFaceId) return null;
     return (
@@ -1508,13 +1494,10 @@ export default function ModelViewer() {
               <span className="eyebrow">LIVE CLIPPING</span>
               <h1>Peel back the volume</h1>
               <p>
-                Black edges track every cut through the confirmed volume.
+                Each handle moves in hundredths of the local model extent.
+                The solid surface is clipped directly; black lines mark cuts.
               </p>
             </section>
-            <div className="slice-count">
-              <strong>{visibleCount.toLocaleString()}</strong>
-              <span>of {displayNodes.length.toLocaleString()} visible</span>
-            </div>
             {(["x", "y", "z"] as const).map((axis) => (
               <RangeControl
                 key={axis}
@@ -1596,6 +1579,8 @@ export default function ModelViewer() {
           tolerance={tolerance}
           elementSurfaces={elementSkin.surfaces}
           showElementSkin={showElementSkin}
+          slicingMode={activeTab === "slicing"}
+          sliceBounds={currentBounds}
           elementEditMode={elementEditMode}
           selectedElementIds={[...selectedElementIds]}
           onPickElement={toggleElementSelection}
