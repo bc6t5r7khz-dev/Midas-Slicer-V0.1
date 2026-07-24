@@ -74,8 +74,10 @@ export type RebarRun = {
   axis: Axis;
   start: number;
   end: number;
-  distributionMode?: "axis" | "edge";
+  distributionMode?: "axis" | "edge" | "path";
   distributionVector?: Vec3;
+  pathStart?: Vec3;
+  pathEnd?: Vec3;
   spacingInches: number;
   positions: number[];
   lines: RebarLine[];

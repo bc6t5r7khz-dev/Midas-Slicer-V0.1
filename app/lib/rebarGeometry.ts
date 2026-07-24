@@ -271,3 +271,110 @@ export function distributeBars(
   }
   return positions;
 }
+
+function dot(first: Vec3, second: Vec3) {
+  return first.x * second.x + first.y * second.y + first.z * second.z;
+}
+
+function segmentDistance(
+  firstStart: Vec3,
+  firstEnd: Vec3,
+  secondStart: Vec3,
+  secondEnd: Vec3,
+) {
+  const u = {
+    x: firstEnd.x - firstStart.x,
+    y: firstEnd.y - firstStart.y,
+    z: firstEnd.z - firstStart.z,
+  };
+  const v = {
+    x: secondEnd.x - secondStart.x,
+    y: secondEnd.y - secondStart.y,
+    z: secondEnd.z - secondStart.z,
+  };
+  const w = {
+    x: firstStart.x - secondStart.x,
+    y: firstStart.y - secondStart.y,
+    z: firstStart.z - secondStart.z,
+  };
+  const a = dot(u, u);
+  const b = dot(u, v);
+  const c = dot(v, v);
+  const d = dot(u, w);
+  const e = dot(v, w);
+  const denominator = a * c - b * b;
+  let firstNumerator = denominator;
+  let firstDenominator = denominator;
+  let secondNumerator = denominator;
+  let secondDenominator = denominator;
+
+  if (denominator < 1e-12) {
+    firstNumerator = 0;
+    firstDenominator = 1;
+    secondNumerator = e;
+    secondDenominator = c;
+  } else {
+    firstNumerator = b * e - c * d;
+    secondNumerator = a * e - b * d;
+    if (firstNumerator < 0) {
+      firstNumerator = 0;
+      secondNumerator = e;
+      secondDenominator = c;
+    } else if (firstNumerator > firstDenominator) {
+      firstNumerator = firstDenominator;
+      secondNumerator = e + b;
+      secondDenominator = c;
+    }
+  }
+  if (secondNumerator < 0) {
+    secondNumerator = 0;
+    if (-d < 0) firstNumerator = 0;
+    else if (-d > a) firstNumerator = firstDenominator;
+    else {
+      firstNumerator = -d;
+      firstDenominator = a;
+    }
+  } else if (secondNumerator > secondDenominator) {
+    secondNumerator = secondDenominator;
+    if (-d + b < 0) firstNumerator = 0;
+    else if (-d + b > a) firstNumerator = firstDenominator;
+    else {
+      firstNumerator = -d + b;
+      firstDenominator = a;
+    }
+  }
+  const firstAmount =
+    Math.abs(firstNumerator) < 1e-12 ? 0 : firstNumerator / firstDenominator;
+  const secondAmount =
+    Math.abs(secondNumerator) < 1e-12
+      ? 0
+      : secondNumerator / secondDenominator;
+  return Math.hypot(
+    w.x + firstAmount * u.x - secondAmount * v.x,
+    w.y + firstAmount * u.y - secondAmount * v.y,
+    w.z + firstAmount * u.z - secondAmount * v.z,
+  );
+}
+
+export function polylineNearOutline(
+  linePoints: Vec3[],
+  outline: Vec3[],
+  distance: number,
+) {
+  if (linePoints.length < 2 || outline.length < 2) return false;
+  for (let lineIndex = 0; lineIndex < linePoints.length - 1; lineIndex += 1) {
+    for (let edgeIndex = 0; edgeIndex < outline.length; edgeIndex += 1) {
+      if (
+        segmentDistance(
+          linePoints[lineIndex],
+          linePoints[lineIndex + 1],
+          outline[edgeIndex],
+          outline[(edgeIndex + 1) % outline.length],
+        ) <= distance
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}

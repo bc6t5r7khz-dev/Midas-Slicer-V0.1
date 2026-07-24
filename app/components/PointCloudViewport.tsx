@@ -61,6 +61,12 @@ type Props = {
   rebarEdgeSelectionMode: boolean;
   onPickRebarEdge: (edgeIndex: number) => void;
   pendingRebarLine: RebarLine | null;
+  draftRebarLines: RebarLine[];
+  rebarSnapLines: RebarLine[];
+  rebarSnapRequired: boolean;
+  rebarPreviewStart: Vec3 | null;
+  rebarPathStart: Vec3 | null;
+  rebarPathEnd: Vec3 | null;
   rebarAxis: "x" | "y" | "z";
   rebarSection: number | null;
   inchesPerModelUnit: number | null;
@@ -559,6 +565,12 @@ export default function PointCloudViewport({
   rebarEdgeSelectionMode,
   onPickRebarEdge,
   pendingRebarLine,
+  draftRebarLines,
+  rebarSnapLines,
+  rebarSnapRequired,
+  rebarPreviewStart,
+  rebarPathStart,
+  rebarPathEnd,
   rebarAxis,
   rebarSection,
   inchesPerModelUnit,
@@ -585,7 +597,10 @@ export default function PointCloudViewport({
     Array<{ object: THREE.LineSegments2; start: Vec3; end: Vec3; index: number }>
   >([]);
   const rebarGuidePointsRef = useRef<Vec3[]>([]);
+  const rebarSnapLinesRef = useRef<RebarLine[]>(rebarSnapLines);
+  const rebarSnapRequiredRef = useRef(rebarSnapRequired);
   const pendingRebarLineRef = useRef(pendingRebarLine);
+  const rebarPreviewStartRef = useRef(rebarPreviewStart);
   const fittedNodesRef = useRef<ModelNode[] | null>(null);
   const fittedBasisRef = useRef<LocalBasis | null>(null);
   const nodesRef = useRef(nodes);
@@ -633,6 +648,9 @@ export default function PointCloudViewport({
   rebarAxisRef.current = rebarAxis;
   rebarSectionRef.current = rebarSection;
   pendingRebarLineRef.current = pendingRebarLine;
+  rebarSnapLinesRef.current = rebarSnapLines;
+  rebarSnapRequiredRef.current = rebarSnapRequired;
+  rebarPreviewStartRef.current = rebarPreviewStart;
 
   const displayOffset = useMemo(() => {
     if (basis || !allNodes.length) return { x: 0, y: 0, z: 0 };
@@ -872,18 +890,82 @@ export default function PointCloudViewport({
       const closestGuideVertex = (event: PointerEvent) => {
         const rect = renderer.domElement.getBoundingClientRect();
         let closest: { point: Vec3; distance: number } | null = null;
-        for (const point of rebarGuidePointsRef.current) {
-          const projected = toThree(point, displayOffsetRef.current).project(
-            camera,
-          );
-          const distance = Math.hypot(
-            event.clientX -
-              (rect.left + ((projected.x + 1) * rect.width) / 2),
-            event.clientY -
-              (rect.top + ((1 - projected.y) * rect.height) / 2),
-          );
-          if (distance <= 18 && (!closest || distance < closest.distance)) {
-            closest = { point, distance };
+        for (const line of rebarSnapLinesRef.current) {
+          for (const point of line.points) {
+            const projected = toThree(
+              point,
+              displayOffsetRef.current,
+            ).project(camera);
+            const distance = Math.hypot(
+              event.clientX -
+                (rect.left + ((projected.x + 1) * rect.width) / 2),
+              event.clientY -
+                (rect.top + ((1 - projected.y) * rect.height) / 2),
+            );
+            if (
+              distance <= 18 &&
+              (!closest || distance < closest.distance)
+            ) {
+              closest = { point, distance };
+            }
+          }
+        }
+        return closest?.point ?? null;
+      };
+
+      const closestGuidePoint = (event: PointerEvent) => {
+        const rect = renderer.domElement.getBoundingClientRect();
+        let closest: { point: Vec3; distance: number } | null = null;
+        for (const line of rebarSnapLinesRef.current) {
+          const segmentCount =
+            line.points.length - 1 + (line.closed ? 1 : 0);
+          for (let index = 0; index < segmentCount; index += 1) {
+            const start = line.points[index];
+            const end = line.points[(index + 1) % line.points.length];
+            const project = (point: Vec3) => {
+              const projected = toThree(
+                point,
+                displayOffsetRef.current,
+              ).project(camera);
+              return {
+                x: rect.left + ((projected.x + 1) * rect.width) / 2,
+                y: rect.top + ((1 - projected.y) * rect.height) / 2,
+              };
+            };
+            const first = project(start);
+            const second = project(end);
+            const dx = second.x - first.x;
+            const dy = second.y - first.y;
+            const denominator = dx * dx + dy * dy;
+            const amount =
+              denominator <= 1e-9
+                ? 0
+                : Math.max(
+                    0,
+                    Math.min(
+                      1,
+                      ((event.clientX - first.x) * dx +
+                        (event.clientY - first.y) * dy) /
+                        denominator,
+                    ),
+                  );
+            const distance = Math.hypot(
+              event.clientX - (first.x + dx * amount),
+              event.clientY - (first.y + dy * amount),
+            );
+            if (
+              distance <= 10 &&
+              (!closest || distance < closest.distance)
+            ) {
+              closest = {
+                point: {
+                  x: start.x + (end.x - start.x) * amount,
+                  y: start.y + (end.y - start.y) * amount,
+                  z: start.z + (end.z - start.z) * amount,
+                },
+                distance,
+              };
+            }
           }
         }
         return closest?.point ?? null;
@@ -893,17 +975,14 @@ export default function PointCloudViewport({
         updatePointer(event);
         const snapped = closestGuideVertex(event);
         if (snapped) return { point: snapped, snapped: true };
-        const hit = raycaster.intersectObjects(rebarGuideObjectsRef.current)[0];
-        if (hit) {
+        const guidePoint = closestGuidePoint(event);
+        if (guidePoint) {
           return {
-            point: {
-              x: hit.point.x + displayOffsetRef.current.x,
-              y: hit.point.y + displayOffsetRef.current.y,
-              z: hit.point.z + displayOffsetRef.current.z,
-            },
+            point: guidePoint,
             snapped: false,
           };
         }
+        if (rebarSnapRequiredRef.current) return null;
         if (rebarSectionRef.current === null) return null;
         const axis = rebarAxisRef.current;
         const normal = new THREE.Vector3(
@@ -1054,7 +1133,7 @@ export default function PointCloudViewport({
           const previous =
             pendingRebarLineRef.current?.points[
               (pendingRebarLineRef.current?.points.length ?? 0) - 1
-            ];
+            ] ?? rebarPreviewStartRef.current;
           if (previous && candidate) {
             rebarPreview.geometry.setFromPoints([
               toThree(previous, displayOffsetRef.current),
@@ -1885,7 +1964,8 @@ export default function PointCloudViewport({
         for (const line of run.lines) {
           const translated = line.points.map((point) => {
             if (
-              run.distributionMode === "edge" &&
+              (run.distributionMode === "edge" ||
+                run.distributionMode === "path") &&
               run.distributionVector
             ) {
               return {
@@ -2049,6 +2129,21 @@ export default function PointCloudViewport({
     if (pendingRebarLine) {
       addPolyline(pendingRebarLine.points, 0xff8a2a, 1, false);
     }
+    for (const line of draftRebarLines) {
+      addPolyline(line.points, 0xd73b32, 1, line.closed ?? false);
+    }
+    if (rebarPathStart && rebarPathEnd) {
+      const path = addPolyline(
+        [rebarPathStart, rebarPathEnd],
+        0xffbf47,
+        1,
+        false,
+      );
+      if (path) {
+        path.material.depthTest = false;
+        path.renderOrder = 24;
+      }
+    }
 
     if (rebarSection !== null && sliceBounds) {
       const [first, second] =
@@ -2080,11 +2175,14 @@ export default function PointCloudViewport({
     }
   }, [
     displayOffset,
+    draftRebarLines,
     pendingRebarLine,
     rebarAxis,
     rebarGuideLine,
     rebarOuterEdges,
     rebarMode,
+    rebarPathEnd,
+    rebarPathStart,
     rebarRuns,
     rebarSection,
     selectedRebarEdgeIndex,
