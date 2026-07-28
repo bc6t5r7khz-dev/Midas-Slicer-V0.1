@@ -80,12 +80,33 @@ export type RebarPlane = {
   nodeIds: number[];
 };
 
+export type RebarGroup = {
+  id: string;
+  name: string;
+  visible: boolean;
+};
+
+export type CameraViewpoint = {
+  position: Vec3;
+  target: Vec3;
+  up: Vec3;
+};
+
+export type SlicePin = {
+  id: string;
+  name: string;
+  planeId: string;
+  offset: number;
+  viewpoint?: CameraViewpoint;
+};
+
 export type RebarRun = {
   id: string;
   name: string;
   color?: string;
   barNumber?: string;
-  planeId?: string;
+  planeId?: string | null;
+  groupId?: string;
   startOffset?: number;
   endOffset?: number;
   axis: Axis;

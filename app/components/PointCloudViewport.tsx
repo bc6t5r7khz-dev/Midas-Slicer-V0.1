@@ -9,6 +9,7 @@ import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { toLocal, transformPlane } from "../lib/coordinateSystem";
 import type {
   Bounds,
+  CameraViewpoint,
   LocalBasis,
   ElementSurface,
   ModelElement,
@@ -54,6 +55,19 @@ type Props = {
   slicingMode: boolean;
   sliceBounds: Bounds | null;
   rebarMode: boolean;
+  showRebarScene: boolean;
+  customSlicePlane: {
+    origin: Vec3;
+    normal: Vec3;
+    offset: number;
+  } | null;
+  viewpointCaptureRequest: { pinId: string; nonce: number } | null;
+  viewpointToApply: {
+    pinId: string;
+    nonce: number;
+    viewpoint: CameraViewpoint;
+  } | null;
+  onViewpointCaptured: (pinId: string, viewpoint: CameraViewpoint) => void;
   showRebarPlaneNodes: boolean;
   rebarRuns: RebarRun[];
   selectedRebarRunIds: ReadonlySet<string>;
@@ -76,6 +90,7 @@ type Props = {
   rebarDrawingPlane: {
     origin: Vec3;
     normal: Vec3;
+    vertical: Vec3;
     color: string;
   } | null;
   rebarPlanePreviews: Array<{
@@ -396,6 +411,7 @@ function clippedSolidBuffers(
   basis: LocalBasis | null,
   slice: SliceRanges,
   offset: Vec3,
+  customPlane: ClipPlane | null,
 ) {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   const planes: ClipPlane[] = [
@@ -406,6 +422,7 @@ function clippedSolidBuffers(
     { normal: { x: 0, y: 0, z: 1 }, constant: -slice.z[0] },
     { normal: { x: 0, y: 0, z: -1 }, constant: slice.z[1] },
   ];
+  if (customPlane) planes.push(customPlane);
   const span = Math.max(
     slice.x[1] - slice.x[0],
     slice.y[1] - slice.y[0],
@@ -488,6 +505,7 @@ function clippedExteriorPositions(
   basis: LocalBasis | null,
   slice: SliceRanges,
   offset: Vec3,
+  customPlane: ClipPlane | null,
 ) {
   const planes: ClipPlane[] = [
     { normal: { x: 1, y: 0, z: 0 }, constant: -slice.x[0] },
@@ -497,6 +515,7 @@ function clippedExteriorPositions(
     { normal: { x: 0, y: 0, z: 1 }, constant: -slice.z[0] },
     { normal: { x: 0, y: 0, z: -1 }, constant: slice.z[1] },
   ];
+  if (customPlane) planes.push(customPlane);
   const positions: number[] = [];
   for (const surface of surfaces) {
     let vertices = surface.vertices.map((vertex) =>
@@ -575,6 +594,11 @@ export default function PointCloudViewport({
   slicingMode,
   sliceBounds,
   rebarMode,
+  showRebarScene,
+  customSlicePlane,
+  viewpointCaptureRequest,
+  viewpointToApply,
+  onViewpointCaptured,
   showRebarPlaneNodes,
   rebarRuns,
   selectedRebarRunIds,
@@ -650,7 +674,13 @@ export default function PointCloudViewport({
   const rebarDrawingPlaneRef = useRef(rebarDrawingPlane);
   const displayOffsetRef = useRef<Vec3>({ x: 0, y: 0, z: 0 });
   const toleranceRef = useRef(tolerance);
+  const inchesPerModelUnitRef = useRef(inchesPerModelUnit);
   const [renderError, setRenderError] = useState<string | null>(null);
+  const [segmentLengthHud, setSegmentLengthHud] = useState<{
+    clientX: number;
+    clientY: number;
+    inches: number;
+  } | null>(null);
 
   nodesRef.current = nodes;
   sliceRef.current = slice;
@@ -677,6 +707,7 @@ export default function PointCloudViewport({
   rebarSnapLinesRef.current = rebarSnapLines;
   rebarSnapRequiredRef.current = rebarSnapRequired;
   rebarPreviewStartRef.current = rebarPreviewStart;
+  inchesPerModelUnitRef.current = inchesPerModelUnit;
 
   const displayOffset = useMemo(() => {
     if (basis || !allNodes.length) return { x: 0, y: 0, z: 0 };
@@ -696,6 +727,49 @@ export default function PointCloudViewport({
   }, [allNodes, basis]);
   displayOffsetRef.current = displayOffset;
   toleranceRef.current = tolerance;
+
+  const displayCustomClipPlane = useMemo<ClipPlane | null>(() => {
+    if (!customSlicePlane) return null;
+    const normal = normalize(customSlicePlane.normal);
+    return {
+      normal: { x: -normal.x, y: -normal.y, z: -normal.z },
+      constant:
+        dot(normal, customSlicePlane.origin) + customSlicePlane.offset,
+    };
+  }, [customSlicePlane]);
+
+  useEffect(() => {
+    const state = sceneRef.current;
+    if (!state || !viewpointCaptureRequest) return;
+    onViewpointCaptured(viewpointCaptureRequest.pinId, {
+      position: {
+        x: state.camera.position.x,
+        y: state.camera.position.y,
+        z: state.camera.position.z,
+      },
+      target: {
+        x: state.controls.target.x,
+        y: state.controls.target.y,
+        z: state.controls.target.z,
+      },
+      up: {
+        x: state.camera.up.x,
+        y: state.camera.up.y,
+        z: state.camera.up.z,
+      },
+    });
+  }, [onViewpointCaptured, viewpointCaptureRequest]);
+
+  useEffect(() => {
+    const state = sceneRef.current;
+    if (!state || !viewpointToApply) return;
+    const { position, target, up } = viewpointToApply.viewpoint;
+    state.camera.position.set(position.x, position.y, position.z);
+    state.camera.up.set(up.x, up.y, up.z);
+    state.controls.target.set(target.x, target.y, target.z);
+    state.camera.lookAt(state.controls.target);
+    state.controls.update();
+  }, [viewpointToApply]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -1075,21 +1149,54 @@ export default function PointCloudViewport({
             (pendingRebarLineRef.current?.points.length ?? 0) - 1
           ];
         if (previous) {
-          const drawingAxes = (["x", "y", "z"] as const).filter(
-            (candidate) => candidate !== axis,
+          const planeVertical = drawingPlane
+            ? new THREE.Vector3(
+                drawingPlane.vertical.x,
+                drawingPlane.vertical.y,
+                drawingPlane.vertical.z,
+              )
+                .addScaledVector(
+                  normal,
+                  -normal.dot(
+                    new THREE.Vector3(
+                      drawingPlane.vertical.x,
+                      drawingPlane.vertical.y,
+                      drawingPlane.vertical.z,
+                    ),
+                  ),
+                )
+                .normalize()
+            : new THREE.Vector3(
+                axis === "z" ? 0 : 0,
+                axis === "z" ? 1 : 0,
+                axis === "z" ? 0 : 1,
+              );
+          const planeHorizontal = new THREE.Vector3()
+            .crossVectors(planeVertical, normal)
+            .normalize();
+          const delta = new THREE.Vector3(
+            point.x - previous.x,
+            point.y - previous.y,
+            point.z - previous.z,
           );
-          const firstAxis = drawingAxes[0];
-          const secondAxis = drawingAxes[1];
-          const firstDelta = Math.abs(
-            point[firstAxis] - previous[firstAxis],
-          );
-          const secondDelta = Math.abs(
-            point[secondAxis] - previous[secondAxis],
-          );
+          const horizontalDelta = planeHorizontal.dot(delta);
+          const verticalDelta = planeVertical.dot(delta);
           const angle =
-            (Math.atan2(secondDelta, firstDelta) * 180) / Math.PI;
-          if (angle <= 5) point[secondAxis] = previous[secondAxis];
-          else if (angle >= 85) point[firstAxis] = previous[firstAxis];
+            (Math.atan2(
+              Math.abs(verticalDelta),
+              Math.abs(horizontalDelta),
+            ) *
+              180) /
+            Math.PI;
+          if (angle <= 5) {
+            point.x = previous.x + planeHorizontal.x * horizontalDelta;
+            point.y = previous.y + planeHorizontal.y * horizontalDelta;
+            point.z = previous.z + planeHorizontal.z * horizontalDelta;
+          } else if (angle >= 85) {
+            point.x = previous.x + planeVertical.x * verticalDelta;
+            point.y = previous.y + planeVertical.y * verticalDelta;
+            point.z = previous.z + planeVertical.z * verticalDelta;
+          }
         }
         return { point, snapped: false };
       };
@@ -1238,8 +1345,21 @@ export default function PointCloudViewport({
               toThree(candidate.point, displayOffsetRef.current),
             ]);
             rebarPreview.visible = true;
+            if (inchesPerModelUnitRef.current) {
+              setSegmentLengthHud({
+                clientX: event.clientX,
+                clientY: event.clientY,
+                inches:
+                  Math.hypot(
+                    candidate.point.x - previous.x,
+                    candidate.point.y - previous.y,
+                    candidate.point.z - previous.z,
+                  ) * inchesPerModelUnitRef.current,
+              });
+            }
           } else {
             rebarPreview.visible = false;
+            setSegmentLengthHud(null);
           }
           renderer.domElement.style.cursor = candidate
             ? "crosshair"
@@ -1251,6 +1371,7 @@ export default function PointCloudViewport({
         rebarSnapMarker.visible = false;
         rebarSnapSegment.visible = false;
         rebarPreview.visible = false;
+        setSegmentLengthHud(null);
         if (rebarEdgeSelectionModeRef.current) {
           const edgeHit = closestRebarEdge(event);
           setHoveredRebarEdge(edgeHit?.object ?? null);
@@ -1522,6 +1643,7 @@ export default function PointCloudViewport({
         rebarSnapMarker.visible = false;
         rebarSnapSegment.visible = false;
         rebarPreview.visible = false;
+        setSegmentLengthHud(null);
         setHoveredRebarEdge(null);
       };
       renderer.domElement.addEventListener("pointerleave", handleLeave);
@@ -1763,6 +1885,7 @@ export default function PointCloudViewport({
         basis,
         slice,
         displayOffset,
+        displayCustomClipPlane,
       );
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute(
@@ -1795,6 +1918,7 @@ export default function PointCloudViewport({
             basis,
             slice,
             displayOffset,
+            displayCustomClipPlane,
           ),
           3,
         ),
@@ -1880,11 +2004,28 @@ export default function PointCloudViewport({
             new THREE.Vector3(0, 0, -1),
             slice.z[1] - displayOffset.z,
           ),
-        ]
+        ].concat(
+          displayCustomClipPlane
+            ? [
+                new THREE.Plane(
+                  new THREE.Vector3(
+                    displayCustomClipPlane.normal.x,
+                    displayCustomClipPlane.normal.y,
+                    displayCustomClipPlane.normal.z,
+                  ),
+                  displayCustomClipPlane.constant +
+                    displayCustomClipPlane.normal.x * displayOffset.x +
+                    displayCustomClipPlane.normal.y * displayOffset.y +
+                    displayCustomClipPlane.normal.z * displayOffset.z,
+                ),
+              ]
+            : [],
+        )
       : [];
     const activeCuts =
       solidView && sliceBounds
         ? clippingPlanes.filter((_, index) => {
+            if (index >= 6) return true;
             const axis = (["x", "x", "y", "y", "z", "z"] as const)[index];
             const endpoint = index % 2;
             const coordinate =
@@ -2048,6 +2189,8 @@ export default function PointCloudViewport({
     selectedElementIds,
     showElementSkin,
     rebarMode,
+    showRebarScene,
+    displayCustomClipPlane,
     showConcreteSkin,
     lineAndBar,
     slice,
@@ -2066,8 +2209,8 @@ export default function PointCloudViewport({
     rebarGuidePointsRef.current = rebarGuideLines.flatMap(
       (line) => line.points,
     );
-    state.rebarGroup.visible = rebarMode;
-    if (!rebarMode) return;
+    state.rebarGroup.visible = showRebarScene;
+    if (!showRebarScene) return;
 
     const addPolyline = (
       points: Vec3[],
@@ -2390,20 +2533,40 @@ export default function PointCloudViewport({
           : new THREE.Vector3(0, 1, 0);
       const u = reference.clone().cross(normal).normalize();
       const v = normal.clone().cross(u).normalize();
-      const size =
-        Math.max(
-          sliceBounds.x[1] - sliceBounds.x[0],
-          sliceBounds.y[1] - sliceBounds.y[0],
-          sliceBounds.z[1] - sliceBounds.z[0],
-          1,
-        ) * 0.85;
-      const center = new THREE.Vector3(origin.x, origin.y, origin.z)
+      const baseCenter = new THREE.Vector3(origin.x, origin.y, origin.z)
         .addScaledVector(normal, offset);
+      const boundsCorners = [sliceBounds.x[0], sliceBounds.x[1]].flatMap((x) =>
+        [sliceBounds.y[0], sliceBounds.y[1]].flatMap((y) =>
+          [sliceBounds.z[0], sliceBounds.z[1]].map(
+            (z) => new THREE.Vector3(x, y, z),
+          ),
+        ),
+      );
+      const uValues = boundsCorners.map((corner) =>
+        u.dot(corner.clone().sub(baseCenter)),
+      );
+      const vValues = boundsCorners.map((corner) =>
+        v.dot(corner.clone().sub(baseCenter)),
+      );
+      const uMid = (Math.min(...uValues) + Math.max(...uValues)) / 2;
+      const vMid = (Math.min(...vValues) + Math.max(...vValues)) / 2;
+      const uHalf = Math.max(
+        (Math.max(...uValues) - Math.min(...uValues)) * 0.6,
+        0.5,
+      );
+      const vHalf = Math.max(
+        (Math.max(...vValues) - Math.min(...vValues)) * 0.6,
+        0.5,
+      );
+      const center = baseCenter
+        .clone()
+        .addScaledVector(u, uMid)
+        .addScaledVector(v, vMid);
       const corners = [
-        center.clone().addScaledVector(u, -size).addScaledVector(v, -size),
-        center.clone().addScaledVector(u, size).addScaledVector(v, -size),
-        center.clone().addScaledVector(u, size).addScaledVector(v, size),
-        center.clone().addScaledVector(u, -size).addScaledVector(v, size),
+        center.clone().addScaledVector(u, -uHalf).addScaledVector(v, -vHalf),
+        center.clone().addScaledVector(u, uHalf).addScaledVector(v, -vHalf),
+        center.clone().addScaledVector(u, uHalf).addScaledVector(v, vHalf),
+        center.clone().addScaledVector(u, -uHalf).addScaledVector(v, vHalf),
       ].map((point) => ({ x: point.x, y: point.y, z: point.z }));
       const geometry = triangulatePolygon(corners, displayOffset);
       state.rebarGroup.add(
@@ -2440,7 +2603,7 @@ export default function PointCloudViewport({
     rebarGuideLines,
     rebarInnerGuideLines,
     rebarOuterEdges,
-    rebarMode,
+    showRebarScene,
     rebarPathEnd,
     rebarPathStart,
     rebarDrawingPlane,
@@ -2733,6 +2896,18 @@ export default function PointCloudViewport({
   }
 
   return (
-    <div ref={hostRef} className="viewport-canvas" aria-label="3D node cloud" />
+    <div ref={hostRef} className="viewport-canvas" aria-label="3D node cloud">
+      {segmentLengthHud && (
+        <div
+          className="rebar-segment-length"
+          style={{
+            left: segmentLengthHud.clientX + 14,
+            top: segmentLengthHud.clientY + 14,
+          }}
+        >
+          {segmentLengthHud.inches.toFixed(2)} in
+        </div>
+      )}
+    </div>
   );
 }

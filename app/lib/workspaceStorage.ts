@@ -3,6 +3,8 @@ import type {
   ModelElement,
   RebarRun,
   RebarPlane,
+  RebarGroup,
+  SlicePin,
   ModelNode,
   SliceRanges,
   VolumeFace,
@@ -33,9 +35,16 @@ export type SavedWorkspace = {
   inchesPerModelUnit?: number | null;
   rebarRuns?: RebarRun[];
   rebarPlanes?: RebarPlane[];
+  rebarGroups?: RebarGroup[];
+  rebarCoverOffsetInches?: number;
+  rebarSecondaryOffsetInches?: number;
+  topRebarPlaneDismissed?: boolean;
   showConcreteSkin?: boolean;
   lineAndBar?: boolean;
   showRebarLabels?: boolean;
+  favoriteRebarPlaneIds?: string[];
+  slicePins?: SlicePin[];
+  showRebarInSlicing?: boolean;
 };
 
 const DATABASE_NAME = "mct-section-lab";

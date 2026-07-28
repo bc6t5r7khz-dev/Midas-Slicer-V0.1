@@ -46,11 +46,23 @@ test("includes plane-based rebar and quantity export workflows", async () => {
     readFile(new URL("../app/lib/types.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/lib/workspaceStorage.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(viewer, /Add New Plane/);
+  assert.match(viewer, /Add Plane/);
+  assert.match(viewer, /Delete Plane/);
+  assert.match(viewer, /Add Group/);
+  assert.match(viewer, /PERIMETER SNAP OFFSETS/);
+  assert.match(viewer, /auto-top-horizontal/);
   assert.match(viewer, /Export Rebar Quantity/);
   assert.match(viewer, /event\.key === "Escape"/);
   assert.match(viewer, /mct-section-lab-project/);
+  assert.match(viewer, /Display rebar/);
+  assert.match(viewer, /FAVORITE PLANES/);
+  assert.match(viewer, /PINNED SLICES/);
+  assert.match(viewer, /Save Viewpoint/);
+  assert.match(viewer, /favoriteRebarPlaneIds/);
+  assert.doesNotMatch(viewer, /<InchRangeControl/);
   assert.match(types, /export type RebarPlane/);
+  assert.match(types, /export type SlicePin/);
   assert.match(types, /barNumber\?: string/);
   assert.match(storage, /rebarPlanes\?: RebarPlane\[\]/);
+  assert.match(storage, /slicePins\?: SlicePin\[\]/);
 });
