@@ -2,6 +2,7 @@ import type {
   LocalBasis,
   ModelElement,
   RebarRun,
+  RebarPlane,
   ModelNode,
   SliceRanges,
   VolumeFace,
@@ -31,6 +32,7 @@ export type SavedWorkspace = {
   elementSkinVolume?: boolean;
   inchesPerModelUnit?: number | null;
   rebarRuns?: RebarRun[];
+  rebarPlanes?: RebarPlane[];
   showConcreteSkin?: boolean;
   lineAndBar?: boolean;
   showRebarLabels?: boolean;

@@ -12,7 +12,7 @@ import { autoHullFaces } from "../lib/autoVolume";
 import { parseMctModel } from "../lib/mctParser";
 import { buildElementSkin } from "../lib/elementSkin";
 import {
-  createCoverOutlines,
+  createPlaneCoverOutlines,
   distributeBars,
 } from "../lib/rebarGeometry";
 import { createSampleMct } from "../lib/sampleModel";
@@ -34,6 +34,7 @@ import type {
   LocalBasis,
   ModelElement,
   RebarLine,
+  RebarPlane,
   RebarRun,
   ModelNode,
   SliceRanges,
@@ -84,6 +85,19 @@ const REBAR_COLORS = [
   "#546e7a",
   "#b0bec5",
   "#212121",
+] as const;
+
+const PLANE_COLORS = [
+  "#42a5f5",
+  "#ab47bc",
+  "#26a69a",
+  "#ffa726",
+  "#ec407a",
+  "#7e57c2",
+  "#66bb6a",
+  "#29b6f6",
+  "#ff7043",
+  "#d4e157",
 ] as const;
 
 const formatCoordinate = (value: number) =>
@@ -174,8 +188,98 @@ const cross = (a: Vec3, b: Vec3): Vec3 => ({
   z: a.x * b.y - a.y * b.x,
 });
 
+const dot = (a: Vec3, b: Vec3) =>
+  a.x * b.x + a.y * b.y + a.z * b.z;
+
+const normalize = (value: Vec3): Vec3 => {
+  const length = Math.hypot(value.x, value.y, value.z);
+  if (length <= 1e-12) throw new Error("The selected nodes do not define a direction.");
+  return {
+    x: value.x / length,
+    y: value.y / length,
+    z: value.z / length,
+  };
+};
+
+const addScaled = (origin: Vec3, direction: Vec3, amount: number): Vec3 => ({
+  x: origin.x + direction.x * amount,
+  y: origin.y + direction.y * amount,
+  z: origin.z + direction.z * amount,
+});
+
+const projectToPlaneOffset = (
+  point: Vec3,
+  origin: Vec3,
+  normal: Vec3,
+  offset: number,
+) => {
+  const currentOffset = dot(subtract(point, origin), normal);
+  return addScaled(point, normal, offset - currentOffset);
+};
+
+const leastUsedRebarColor = (runs: RebarRun[]) => {
+  const counts = new Map(REBAR_COLORS.map((color) => [color, 0]));
+  runs.forEach((run) => {
+    if (run.color && counts.has(run.color as (typeof REBAR_COLORS)[number])) {
+      counts.set(
+        run.color as (typeof REBAR_COLORS)[number],
+        (counts.get(run.color as (typeof REBAR_COLORS)[number]) ?? 0) + 1,
+      );
+    }
+  });
+  const minimum = Math.min(...counts.values());
+  const candidates = [...counts.entries()]
+    .filter(([, count]) => count === minimum)
+    .map(([color]) => color);
+  return candidates[Math.floor(Math.random() * candidates.length)] ?? REBAR_COLORS[0];
+};
+
+const migrateRebarProject = (
+  runs: RebarRun[],
+  savedPlanes: RebarPlane[] | undefined,
+  savedBasis: LocalBasis | null,
+) => {
+  const planes = [...(savedPlanes ?? [])];
+  const migratedRuns = runs.map((run) => {
+    if (run.planeId && planes.some((plane) => plane.id === run.planeId)) {
+      return run;
+    }
+    const id = `legacy-plane-${run.id}`;
+    const axisDirection: Vec3 = {
+      x: run.axis === "x" ? 1 : 0,
+      y: run.axis === "y" ? 1 : 0,
+      z: run.axis === "z" ? 1 : 0,
+    };
+    const objectNormal = normalize(
+      reframeDirection(axisDirection, savedBasis, null),
+    );
+    const objectOrigin =
+      run.objectPathStart ??
+      run.objectLines?.[0]?.points[0] ??
+      reframePoint(run.lines[0]?.points[0] ?? { x: 0, y: 0, z: 0 }, savedBasis, null);
+    planes.push({
+      id,
+      name: `Legacy ${run.name} plane`,
+      color: PLANE_COLORS[planes.length % PLANE_COLORS.length],
+      objectOrigin,
+      objectNormal,
+      nodeIds: [],
+    });
+    const objectStart = run.objectPathStart ?? objectOrigin;
+    const objectEnd = run.objectPathEnd ?? objectStart;
+    return {
+      ...run,
+      planeId: id,
+      startOffset: dot(subtract(objectStart, objectOrigin), objectNormal),
+      endOffset: dot(subtract(objectEnd, objectOrigin), objectNormal),
+    };
+  });
+  return { runs: migratedRuns, planes };
+};
+
 export default function ModelViewer() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const projectInputRef = useRef<HTMLInputElement>(null);
   const [allNodes, setAllNodes] = useState<ModelNode[]>([]);
   const [elements, setElements] = useState<ModelElement[]>([]);
   const [showElementSkin, setShowElementSkin] = useState(true);
@@ -233,9 +337,17 @@ export default function ModelViewer() {
   const [showConcreteSkin, setShowConcreteSkin] = useState(true);
   const [lineAndBar, setLineAndBar] = useState(false);
   const [showRebarLabels, setShowRebarLabels] = useState(false);
+  const [rebarPlanes, setRebarPlanes] = useState<RebarPlane[]>([]);
+  const [activeRebarPlaneId, setActiveRebarPlaneId] =
+    useState<string | null>(null);
+  const [rebarPlaneDraftNodeIds, setRebarPlaneDraftNodeIds] = useState<
+    number[]
+  >([]);
   const [rebarPhase, setRebarPhase] = useState<
     | "idle"
     | "lap-source"
+    | "plane"
+    | "plane-create"
     | "start"
     | "lines"
     | "path-start"
@@ -251,6 +363,7 @@ export default function ModelViewer() {
   const [editingRebarRunId, setEditingRebarRunId] =
     useState<string | null>(null);
   const [rebarName, setRebarName] = useState("Bar Run 1");
+  const [rebarBarNumber, setRebarBarNumber] = useState("5");
   const [rebarAxis, setRebarAxis] = useState<Axis>("x");
   const [rebarStart, setRebarStart] = useState(0);
   const [rebarEnd, setRebarEnd] = useState(0);
@@ -386,18 +499,58 @@ export default function ModelViewer() {
     },
     [],
   );
+  const activeRebarPlane = useMemo(
+    () =>
+      activeRebarPlaneId
+        ? rebarPlanes.find((plane) => plane.id === activeRebarPlaneId) ?? null
+        : null,
+    [activeRebarPlaneId, rebarPlanes],
+  );
+  const displayRebarPlane = useMemo(() => {
+    if (!activeRebarPlane) return null;
+    return {
+      origin: reframePoint(activeRebarPlane.objectOrigin, null, basis),
+      normal: normalize(
+        reframeDirection(activeRebarPlane.objectNormal, null, basis),
+      ),
+    };
+  }, [activeRebarPlane, basis]);
+  const displayRebarPlanePreviews = useMemo(
+    () =>
+      rebarPhase === "plane" || rebarPhase === "plane-create"
+        ? rebarPlanes.map((plane) => ({
+            id: plane.id,
+            color: plane.color,
+            origin: reframePoint(plane.objectOrigin, null, basis),
+            normal: normalize(
+              reframeDirection(plane.objectNormal, null, basis),
+            ),
+          }))
+        : [],
+    [basis, rebarPhase, rebarPlanes],
+  );
+  const rebarPlaneBounds = useMemo<[number, number]>(() => {
+    if (!displayRebarPlane || !allNodes.length) return [0, 0];
+    const values = allNodes.map((node) =>
+      dot(
+        subtract(node.local ?? node.global, displayRebarPlane.origin),
+        displayRebarPlane.normal,
+      ),
+    );
+    return [Math.min(...values), Math.max(...values)];
+  }, [allNodes, displayRebarPlane]);
   const rebarEndBookmarks = useMemo(
     () =>
       rebarRuns
-        .filter((run) => run.axis === rebarAxis)
-        .map((run) => run.end)
+        .filter((run) => run.planeId === activeRebarPlaneId)
+        .map((run) => run.endOffset ?? run.end)
         .filter(
           (value, index, values) =>
             values.findIndex(
               (candidate) => Math.abs(candidate - value) <= tolerance,
             ) === index,
         ),
-    [rebarAxis, rebarRuns, tolerance],
+    [activeRebarPlaneId, rebarRuns, tolerance],
   );
   const selectedRebarRun = useMemo(() => {
     if (selectedRebarRunIds.size !== 1) return null;
@@ -418,20 +571,23 @@ export default function ModelViewer() {
   const rebarGuideLines = useMemo(() => {
     if (
       !inchesPerModelUnit ||
+      !displayRebarPlane ||
       rebarPhase === "idle" ||
-      rebarPhase === "start"
+      rebarPhase === "start" ||
+      rebarPhase === "plane" ||
+      rebarPhase === "plane-create"
     ) {
       return [];
     }
-    const coordinate =
+    const offset =
       rebarPhase === "path-end" || rebarPhase === "spacing"
         ? rebarEnd
         : rebarStart;
-    return createCoverOutlines(
+    return createPlaneCoverOutlines(
       allNodes,
       elements,
-      rebarAxis,
-      coordinate,
+      addScaled(displayRebarPlane.origin, displayRebarPlane.normal, offset),
+      displayRebarPlane.normal,
       2 / inchesPerModelUnit,
     ).map((points, index) => ({
       id: `cover-guide-2-${index}`,
@@ -442,7 +598,7 @@ export default function ModelViewer() {
     allNodes,
     elements,
     inchesPerModelUnit,
-    rebarAxis,
+    displayRebarPlane,
     rebarEnd,
     rebarPhase,
     rebarStart,
@@ -450,20 +606,23 @@ export default function ModelViewer() {
   const rebarInnerGuideLines = useMemo(() => {
     if (
       !inchesPerModelUnit ||
+      !displayRebarPlane ||
       rebarPhase === "idle" ||
-      rebarPhase === "start"
+      rebarPhase === "start" ||
+      rebarPhase === "plane" ||
+      rebarPhase === "plane-create"
     ) {
       return [];
     }
-    const coordinate =
+    const offset =
       rebarPhase === "path-end" || rebarPhase === "spacing"
         ? rebarEnd
         : rebarStart;
-    return createCoverOutlines(
+    return createPlaneCoverOutlines(
       allNodes,
       elements,
-      rebarAxis,
-      coordinate,
+      addScaled(displayRebarPlane.origin, displayRebarPlane.normal, offset),
+      displayRebarPlane.normal,
       4 / inchesPerModelUnit,
     ).map((points, index) => ({
       id: `cover-guide-4-${index}`,
@@ -474,7 +633,7 @@ export default function ModelViewer() {
     allNodes,
     elements,
     inchesPerModelUnit,
-    rebarAxis,
+    displayRebarPlane,
     rebarEnd,
     rebarPhase,
     rebarStart,
@@ -490,6 +649,9 @@ export default function ModelViewer() {
     setScaleNodeIds([]);
     setInchesPerModelUnit(null);
     setRebarRuns([]);
+    setRebarPlanes([]);
+    setActiveRebarPlaneId(null);
+    setRebarPlaneDraftNodeIds([]);
     setLineAndBar(false);
     setRebarPhase("idle");
     setRebarWorkflowKind("create");
@@ -566,14 +728,23 @@ export default function ModelViewer() {
         setShowElementSkin(saved.showElementSkin ?? Boolean(saved.elements?.length));
         setElementSkinVolume(saved.elementSkinVolume ?? false);
         setInchesPerModelUnit(saved.inchesPerModelUnit ?? null);
+        const migratedRebar = migrateRebarProject(
+          saved.rebarRuns ?? [],
+          saved.rebarPlanes,
+          saved.basis,
+        );
         setRebarRuns(
-          (saved.rebarRuns ?? []).map((run) =>
+          migratedRebar.runs.map((run) =>
             reframeRebarRun(
               run,
               saved.basis,
               saved.basis,
             ),
           ),
+        );
+        setRebarPlanes(migratedRebar.planes);
+        setActiveRebarPlaneId(
+          migratedRebar.planes[0]?.id ?? null,
         );
         setShowConcreteSkin(saved.showConcreteSkin ?? true);
         setLineAndBar(saved.lineAndBar ?? false);
@@ -640,6 +811,7 @@ export default function ModelViewer() {
         elementSkinVolume,
         inchesPerModelUnit,
         rebarRuns,
+        rebarPlanes,
         showConcreteSkin,
         lineAndBar,
         showRebarLabels,
@@ -666,6 +838,7 @@ export default function ModelViewer() {
     selectedFaceIds,
     selectedNode?.id,
     rebarRuns,
+    rebarPlanes,
     smartSelecting,
     smartVariant,
     smartAxis,
@@ -680,12 +853,215 @@ export default function ModelViewer() {
   ]);
 
   const loadFile = async (file: File) => {
+    if (file.name.toLowerCase().endsWith(".mctlab.json")) {
+      await importProject(file);
+      return;
+    }
     if (!file.name.toLowerCase().endsWith(".mct")) {
-      setError("Choose a MIDAS Civil .mct file.");
+      setError("Choose a MIDAS Civil .mct or MCT Section Lab project file.");
       return;
     }
     setStatus("Reading file…");
     loadText(await file.text(), file.name);
+  };
+
+  const downloadBlob = (blob: Blob, name: string) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = name;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const exportProject = () => {
+    const workspace: SavedWorkspace = {
+      version: 1,
+      fileName,
+      nodes: allNodes.map(({ id, global }) => ({ id, global })),
+      faces,
+      activeTab,
+      definingFaces: false,
+      smartSelecting: false,
+      smartVariant,
+      smartAxis,
+      draftNodeIds: [],
+      selectedFaceIds: [],
+      volumeConfirmed,
+      floorFaceId,
+      xDirectionNodeIds,
+      basis,
+      slice,
+      selectedNodeId: selectedNode?.id ?? null,
+      elements,
+      showElementSkin,
+      elementSkinVolume,
+      inchesPerModelUnit,
+      rebarRuns,
+      rebarPlanes,
+      showConcreteSkin,
+      lineAndBar,
+      showRebarLabels,
+    };
+    downloadBlob(
+      new Blob(
+        [
+          JSON.stringify(
+            {
+              format: "mct-section-lab-project",
+              version: 1,
+              savedAt: new Date().toISOString(),
+              workspace,
+            },
+            null,
+            2,
+          ),
+        ],
+        { type: "application/json" },
+      ),
+      `${fileName.replace(/\.[^.]+$/, "") || "mct-project"}.mctlab.json`,
+    );
+    setStatus("Project exported with geometry, planes, and reinforcement.");
+  };
+
+  async function importProject(file: File) {
+    try {
+      const payload = JSON.parse(await file.text()) as {
+        format?: string;
+        workspace?: SavedWorkspace;
+      };
+      const saved = payload.workspace;
+      if (
+        payload.format !== "mct-section-lab-project" ||
+        !saved ||
+        !Array.isArray(saved.nodes)
+      ) {
+        throw new Error("This is not an MCT Section Lab project file.");
+      }
+      const restoredNodes: ModelNode[] = saved.nodes.map((node) => ({
+        ...node,
+        local: null,
+      }));
+      const nodes = saved.basis
+        ? transformNodes(restoredNodes, saved.basis)
+        : restoredNodes;
+      const migrated = migrateRebarProject(
+        saved.rebarRuns ?? [],
+        saved.rebarPlanes,
+        saved.basis,
+      );
+      setAllNodes(nodes);
+      setElements(saved.elements ?? []);
+      setShowElementSkin(saved.showElementSkin ?? Boolean(saved.elements?.length));
+      setElementSkinVolume(saved.elementSkinVolume ?? false);
+      setInchesPerModelUnit(saved.inchesPerModelUnit ?? null);
+      setRebarRuns(
+        migrated.runs.map((run) =>
+          reframeRebarRun(run, saved.basis, saved.basis),
+        ),
+      );
+      setRebarPlanes(migrated.planes);
+      setActiveRebarPlaneId(migrated.planes[0]?.id ?? null);
+      setShowConcreteSkin(saved.showConcreteSkin ?? true);
+      setLineAndBar(saved.lineAndBar ?? false);
+      setShowRebarLabels(saved.showRebarLabels ?? false);
+      setFileName(saved.fileName);
+      setGlobalBounds(getBounds(restoredNodes, false));
+      setFaces(saved.faces ?? []);
+      setActiveTab(saved.activeTab ?? "volume");
+      setDefiningFaces(false);
+      setSmartSelecting(false);
+      setDraftNodeIds([]);
+      setSelectedFaceIds(new Set());
+      setVolumeConfirmed(saved.volumeConfirmed ?? false);
+      setFloorFaceId(saved.floorFaceId ?? null);
+      setXDirectionNodeIds(saved.xDirectionNodeIds ?? []);
+      setBasis(saved.basis ?? null);
+      setSlice(saved.slice ?? fullSlice(getBounds(nodes, Boolean(saved.basis))));
+      setSelectedNode(
+        nodes.find((node) => node.id === saved.selectedNodeId) ?? null,
+      );
+      setRebarPhase("idle");
+      setSelectedRebarRunIds(new Set());
+      setStatus("Project imported with geometry, planes, and reinforcement.");
+      setError(null);
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Could not import project.",
+      );
+    }
+  }
+
+  const exportRebarQuantities = () => {
+    if (!inchesPerModelUnit || !rebarRuns.length) return;
+    const escapeXml = (value: string) =>
+      value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    const rows = rebarRuns.map((run) => {
+      const lines = run.objectLines ?? run.lines;
+      const lengthModelUnits = lines.reduce(
+        (total, line) =>
+          total +
+          line.points.slice(1).reduce((lineTotal, point, index) => {
+            const previous = line.points[index];
+            return (
+              lineTotal +
+              Math.hypot(
+                point.x - previous.x,
+                point.y - previous.y,
+                point.z - previous.z,
+              )
+            );
+          }, 0),
+        0,
+      );
+      const lengthFeet = (lengthModelUnits * inchesPerModelUnit) / 12;
+      return {
+        name: run.name,
+        quantity: run.positions.length,
+        barNumber: run.barNumber ?? "5",
+        lengthFeet,
+        totalFeet: lengthFeet * run.positions.length,
+      };
+    });
+    const totals = new Map<string, number>();
+    rows.forEach((row) =>
+      totals.set(
+        row.barNumber,
+        (totals.get(row.barNumber) ?? 0) + row.totalFeet,
+      ),
+    );
+    const cell = (type: "String" | "Number", value: string | number) =>
+      `<Cell><Data ss:Type="${type}">${type === "String" ? escapeXml(String(value)) : value}</Data></Cell>`;
+    const header = (values: string[]) =>
+      `<Row ss:StyleID="Header">${values.map((value) => cell("String", value)).join("")}</Row>`;
+    const scheduleRows = rows
+      .map(
+        (row) =>
+          `<Row>${cell("String", row.name)}${cell("Number", row.quantity)}${cell("String", `#${row.barNumber}`)}${cell("Number", Number(row.lengthFeet.toFixed(3)))}${cell("Number", Number(row.totalFeet.toFixed(3)))}</Row>`,
+      )
+      .join("");
+    const totalRows = [...totals.entries()]
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(
+        ([barNumber, total]) =>
+          `<Row>${cell("String", `#${barNumber}`)}${cell("Number", Number(total.toFixed(3)))}</Row>`,
+      )
+      .join("");
+    const workbook = `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+<Styles><Style ss:ID="Default"><Alignment ss:Vertical="Center"/><Font ss:FontName="Aptos" ss:Size="10"/></Style><Style ss:ID="Header"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#155E75" ss:Pattern="Solid"/></Style></Styles>
+<Worksheet ss:Name="Bar Schedule"><Table><Column ss:Width="180"/><Column ss:Width="65"/><Column ss:Width="65"/><Column ss:Width="90"/><Column ss:Width="95"/>${header(["Bar Name", "Quantity", "Bar Number", "Length Each (ft)", "Total Length (ft)"])}${scheduleRows}</Table></Worksheet>
+<Worksheet ss:Name="Totals by Bar Number"><Table><Column ss:Width="100"/><Column ss:Width="140"/>${header(["Bar Number", "Total Length (ft)"])}${totalRows}</Table></Worksheet>
+</Workbook>`;
+    downloadBlob(
+      new Blob([workbook], { type: "application/vnd.ms-excel" }),
+      `${fileName.replace(/\.[^.]+$/, "") || "rebar"}-quantities.xls`,
+    );
+    setStatus("Excel rebar quantity workbook exported.");
   };
 
   const commitDraftFace = useCallback(() => {
@@ -874,8 +1250,6 @@ export default function ModelViewer() {
       setAllNodes(transformed);
       setBasis(nextBasis);
       setSlice(fullSlice(bounds));
-      setRebarStart(bounds[rebarAxis][0]);
-      setRebarEnd(bounds[rebarAxis][1]);
       setStatus("Floor aligned to XY and local X direction applied.");
       setError(null);
     } catch (caught) {
@@ -891,6 +1265,63 @@ export default function ModelViewer() {
     const node = allNodes.find((candidate) => candidate.id === nodeId);
     if (!node) return;
     setSelectedNode(node);
+
+    if (activeTab === "rebar" && rebarPhase === "plane-create") {
+      if (rebarPlaneDraftNodeIds.includes(nodeId)) return;
+      const next = [...rebarPlaneDraftNodeIds, nodeId];
+      if (next.length < 2) {
+        setRebarPlaneDraftNodeIds(next);
+        setStatus("Plane definition: select the second node.");
+        return;
+      }
+      const first = allNodes.find((candidate) => candidate.id === next[0]);
+      const second = allNodes.find((candidate) => candidate.id === next[1]);
+      if (!first || !second) return;
+      try {
+        const vertical = normalize(
+          basis?.zAxis ?? { x: 0, y: 0, z: 1 },
+        );
+        const rawDirection = subtract(second.global, first.global);
+        const horizontal = subtract(
+          rawDirection,
+          {
+            x: vertical.x * dot(rawDirection, vertical),
+            y: vertical.y * dot(rawDirection, vertical),
+            z: vertical.z * dot(rawDirection, vertical),
+          },
+        );
+        const objectNormal = normalize(cross(normalize(horizontal), vertical));
+        const plane: RebarPlane = {
+          id: `rebar-plane-${crypto.randomUUID()}`,
+          name: `Plane ${rebarPlanes.length + 1}`,
+          color:
+            PLANE_COLORS[
+              (rebarPlanes.length +
+                Math.floor(Math.random() * PLANE_COLORS.length)) %
+                PLANE_COLORS.length
+            ],
+          objectOrigin: { ...first.global },
+          objectNormal,
+          nodeIds: next,
+        };
+        setRebarPlanes((current) => [...current, plane]);
+        setActiveRebarPlaneId(plane.id);
+        setRebarPlaneDraftNodeIds([]);
+        setRebarStart(0);
+        setRebarEnd(0);
+        setRebarPhase("start");
+        setStatus(`${plane.name} created. Choose the start section.`);
+        setError(null);
+      } catch (caught) {
+        setRebarPlaneDraftNodeIds([]);
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : "Those nodes could not define a vertical plane.",
+        );
+      }
+      return;
+    }
 
     if (activeTab === "coordinates" && scaleDefining) {
       setScaleNodeIds((current) => {
@@ -993,23 +1424,41 @@ export default function ModelViewer() {
     setRebarWorkflowKind("create");
     setRebarReferenceRunId(null);
     setEditingRebarRunId(null);
-    setRebarPhase("start");
+    setRebarPhase("plane");
     setRebarLines([]);
     setPendingRebarLine(null);
     setRebarPathStart(null);
     setRebarPathEnd(null);
-    setStatus("Confirm the previous section or choose a new one.");
+    setRebarBarNumber("5");
+    setStatus("Choose a vertical drawing plane or add a new one.");
+  };
+
+  const chooseRebarPlane = (planeId: string) => {
+    const previous = [...rebarRuns]
+      .reverse()
+      .find((run) => run.planeId === planeId);
+    setActiveRebarPlaneId(planeId);
+    setRebarStart(previous?.startOffset ?? 0);
+    setRebarEnd(previous?.endOffset ?? previous?.startOffset ?? 0);
+    setRebarPhase("start");
+    setStatus(
+      previous
+        ? `Plane selected. Last-used sections for ${previous.name} restored.`
+        : "Plane selected. Choose the start section.",
+    );
   };
 
   const beginLappedRebar = (source: RebarRun) => {
     setRebarWorkflowKind("lap");
     setRebarReferenceRunId(source.id);
     setEditingRebarRunId(null);
+    setActiveRebarPlaneId(source.planeId ?? null);
     setRebarAxis(source.axis);
-    setRebarStart(source.start);
-    setRebarEnd(source.end);
+    setRebarStart(source.startOffset ?? source.start);
+    setRebarEnd(source.endOffset ?? source.end);
     setRebarSpacing(source.spacingInches);
     setRebarName(`${source.name} Lap`);
+    setRebarBarNumber(source.barNumber ?? "5");
     setRebarLines([]);
     setPendingRebarLine(null);
     setRebarPathStart(null);
@@ -1025,11 +1474,13 @@ export default function ModelViewer() {
     setRebarWorkflowKind("edit");
     setRebarReferenceRunId(run.lappedFromRunId ?? null);
     setEditingRebarRunId(run.id);
+    setActiveRebarPlaneId(run.planeId ?? null);
     setRebarAxis(run.axis);
-    setRebarStart(run.start);
-    setRebarEnd(run.end);
+    setRebarStart(run.startOffset ?? run.start);
+    setRebarEnd(run.endOffset ?? run.end);
     setRebarSpacing(run.spacingInches);
     setRebarName(run.name);
+    setRebarBarNumber(run.barNumber ?? "5");
     setRebarLines([]);
     setPendingRebarLine(
       run.lines[0]
@@ -1042,11 +1493,15 @@ export default function ModelViewer() {
     setRebarPathStart(run.pathStart ?? null);
     setRebarPathEnd(run.pathEnd ?? null);
     setSelectedRebarRunIds(new Set([run.id]));
-    setRebarPhase("start");
+    setRebarPhase(run.lappedFromRunId ? "start" : run.planeId ? "plane" : "start");
     setStatus(`Editing ${run.name}. Confirm or update each step.`);
   };
 
   const confirmRebarStartSection = () => {
+    if (!displayRebarPlane) {
+      setError("Choose a drawing plane first.");
+      return;
+    }
     const editingRun = editingRebarRunId
       ? rebarRuns.find((run) => run.id === editingRebarRunId)
       : null;
@@ -1055,10 +1510,14 @@ export default function ModelViewer() {
       sourceLine
         ? {
             ...sourceLine,
-            points: sourceLine.points.map((point) => ({
-              ...point,
-              [rebarAxis]: rebarStart,
-            })),
+            points: sourceLine.points.map((point) =>
+              projectToPlaneOffset(
+                point,
+                displayRebarPlane.origin,
+                displayRebarPlane.normal,
+                rebarStart,
+              ),
+            ),
           }
         : {
             id: `line-${crypto.randomUUID()}`,
@@ -1067,10 +1526,14 @@ export default function ModelViewer() {
           },
     );
     if (editingRun && rebarPathStart) {
-      setRebarPathStart({
-        ...rebarPathStart,
-        [rebarAxis]: rebarStart,
-      });
+      setRebarPathStart(
+        projectToPlaneOffset(
+          rebarPathStart,
+          displayRebarPlane.origin,
+          displayRebarPlane.normal,
+          rebarStart,
+        ),
+      );
     }
     setRebarLines([]);
     setRebarPhase("lines");
@@ -1107,7 +1570,14 @@ export default function ModelViewer() {
       return;
     }
     if (rebarPhase === "path-end") {
-      const endpoint = { ...point, [rebarAxis]: rebarEnd };
+      const endpoint = displayRebarPlane
+        ? projectToPlaneOffset(
+            point,
+            displayRebarPlane.origin,
+            displayRebarPlane.normal,
+            rebarEnd,
+          )
+        : point;
       setRebarPathEnd(endpoint);
       setRebarPhase("spacing");
       setStatus("Spacing path defined. Set the nominal spacing.");
@@ -1157,7 +1627,11 @@ export default function ModelViewer() {
     const run: RebarRun = {
       id: editingRun?.id ?? `rebar-${crypto.randomUUID()}`,
       name: rebarName.trim() || `Bar Run ${rebarRuns.length + 1}`,
-      color: editingRun?.color ?? referenceRun?.color ?? REBAR_COLORS[0],
+      color: editingRun?.color ?? leastUsedRebarColor(rebarRuns),
+      barNumber: rebarBarNumber.trim().replace(/^#/, "") || "5",
+      planeId: activeRebarPlaneId ?? undefined,
+      startOffset: rebarStart,
+      endOffset: rebarEnd,
       axis: rebarAxis,
       start: rebarStart,
       end: rebarEnd,
@@ -1203,6 +1677,7 @@ export default function ModelViewer() {
     setRebarPathStart(null);
     setRebarPathEnd(null);
     setRebarName(`Bar Run ${rebarRuns.length + (editingRun ? 1 : 2)}`);
+    setRebarBarNumber("5");
     setStatus(
       `${run.name} ${editingRun ? "updated" : "created"} with ${run.positions.length} bars.`,
     );
@@ -1222,13 +1697,18 @@ export default function ModelViewer() {
       setError("The selected source bar does not have a spacing direction.");
       return;
     }
-    if (Math.abs(direction[rebarAxis]) <= 1e-9) {
+    if (!displayRebarPlane) {
+      setError("The selected source bar does not have a valid drawing plane.");
+      return;
+    }
+    const crossing = dot(direction, displayRebarPlane.normal);
+    if (Math.abs(crossing) <= 1e-9) {
       setError(
-        "The source bar spacing direction does not cross the selected section axis.",
+        "The source bar spacing direction does not cross its drawing plane.",
       );
       return;
     }
-    const distance = (rebarEnd - rebarStart) / direction[rebarAxis];
+    const distance = (rebarEnd - rebarStart) / crossing;
     const endpoint = {
       x: startPoint.x + direction.x * distance,
       y: startPoint.y + direction.y * distance,
@@ -1247,6 +1727,7 @@ export default function ModelViewer() {
     setPendingRebarLine(null);
     setRebarPathStart(null);
     setRebarPathEnd(null);
+    setRebarPlaneDraftNodeIds([]);
     setStatus("Rebar workflow cancelled.");
   }, []);
 
@@ -1258,8 +1739,13 @@ export default function ModelViewer() {
         event.key.toLowerCase() === "z";
       const stepBack =
         event.key === "Backspace" && rebarPhase !== "idle";
-      if (!controlUndo && !stepBack) return;
+      const cancel = event.key === "Escape" && rebarPhase !== "idle";
+      if (!controlUndo && !stepBack && !cancel) return;
       event.preventDefault();
+      if (cancel) {
+        cancelRebarWorkflow();
+        return;
+      }
       if (pendingRebarLine?.points.length) {
         setPendingRebarLine({
           ...pendingRebarLine,
@@ -1289,6 +1775,14 @@ export default function ModelViewer() {
         setRebarLines([]);
         setRebarPhase("lines");
       } else if (rebarPhase === "start") {
+        setRebarPhase(activeLappedWorkflow ? "idle" : "plane");
+      } else if (rebarPhase === "plane-create") {
+        if (rebarPlaneDraftNodeIds.length) {
+          setRebarPlaneDraftNodeIds((current) => current.slice(0, -1));
+        } else {
+          setRebarPhase("plane");
+        }
+      } else if (rebarPhase === "plane") {
         cancelRebarWorkflow();
       } else if (rebarPhase === "lap-source") {
         cancelRebarWorkflow();
@@ -1303,6 +1797,7 @@ export default function ModelViewer() {
     activeLappedWorkflow,
     pendingRebarLine,
     rebarLines,
+    rebarPlaneDraftNodeIds.length,
     rebarPhase,
     rebarRuns.length,
     cancelRebarWorkflow,
@@ -1618,9 +2113,16 @@ export default function ModelViewer() {
       ...draftNodeIds,
       ...xDirectionNodeIds,
       ...scaleNodeIds,
+      ...rebarPlaneDraftNodeIds,
       ...(editableFace?.nodeIds ?? []),
     ],
-    [draftNodeIds, editableFace, scaleNodeIds, xDirectionNodeIds],
+    [
+      draftNodeIds,
+      editableFace,
+      rebarPlaneDraftNodeIds,
+      scaleNodeIds,
+      xDirectionNodeIds,
+    ],
   );
   const floorOrbitFace = useMemo(() => {
     if (!floorFaceId) return null;
@@ -1780,6 +2282,15 @@ export default function ModelViewer() {
             Load demo
           </button>
           <button
+            className="button ghost"
+            onClick={() => projectInputRef.current?.click()}
+          >
+            Import Project
+          </button>
+          <button className="button ghost" onClick={exportProject}>
+            Export Project
+          </button>
+          <button
             className="button primary"
             onClick={() => fileInputRef.current?.click()}
           >
@@ -1793,6 +2304,17 @@ export default function ModelViewer() {
             onChange={(event) => {
               const file = event.target.files?.[0];
               if (file) void loadFile(file);
+              event.target.value = "";
+            }}
+          />
+          <input
+            ref={projectInputRef}
+            className="visually-hidden"
+            type="file"
+            accept=".json,.mctlab.json,application/json"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void importProject(file);
               event.target.value = "";
             }}
           />
@@ -2345,71 +2867,106 @@ export default function ModelViewer() {
                   </section>
                 )}
 
+                {rebarPhase === "plane" && (
+                  <section className="rebar-step">
+                    <span className="eyebrow">DRAWING PLANE</span>
+                    <div className="selection-callout">
+                      <strong>Choose a vertical plane</strong>
+                      <span>
+                        Saved planes are shown in the viewer. Their colors match
+                        this list and remain fixed to the model.
+                      </span>
+                    </div>
+                    <div className="rebar-plane-list">
+                      {rebarPlanes.map((plane) => (
+                        <button
+                          type="button"
+                          key={plane.id}
+                          className={
+                            activeRebarPlaneId === plane.id ? "selected" : ""
+                          }
+                          onClick={() => chooseRebarPlane(plane.id)}
+                        >
+                          <i style={{ background: plane.color }} />
+                          <span>{plane.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      className="button primary wide"
+                      onClick={() => {
+                        setRebarPlaneDraftNodeIds([]);
+                        setRebarPhase("plane-create");
+                        setStatus(
+                          "Select two nodes to define the horizontal direction of a vertical plane.",
+                        );
+                      }}
+                    >
+                      Add New Plane
+                    </button>
+                    <button className="text-button" onClick={cancelRebarWorkflow}>
+                      Cancel
+                    </button>
+                  </section>
+                )}
+
+                {rebarPhase === "plane-create" && (
+                  <section className="rebar-step">
+                    <span className="eyebrow">NEW VERTICAL PLANE</span>
+                    <div className="selection-callout">
+                      <strong>
+                        Select node {rebarPlaneDraftNodeIds.length + 1} of 2
+                      </strong>
+                      <span>
+                        The two nodes define the plane direction. Vertical comes
+                        from the project axes you already established.
+                      </span>
+                    </div>
+                    <button className="text-button" onClick={cancelRebarWorkflow}>
+                      Cancel
+                    </button>
+                  </section>
+                )}
+
                 {rebarPhase === "start" && (
                   <section className="rebar-step">
                     <span className="eyebrow">START SECTION</span>
-                    <div className="axis-choice">
-                      {(["x", "y", "z"] as const).map((axis) => (
-                        <button
-                          key={axis}
-                          className={rebarAxis === axis ? "active" : ""}
-                          disabled={activeLappedWorkflow}
-                          onClick={() => {
-                            setRebarAxis(axis);
-                            setRebarStart(currentBounds[axis][0]);
-                            setRebarEnd(currentBounds[axis][1]);
-                          }}
-                        >
-                          {axis.toUpperCase()}
-                        </button>
-                      ))}
+                    <div className="active-plane-chip">
+                      <i style={{ background: activeRebarPlane?.color }} />
+                      <span>{activeRebarPlane?.name ?? "No plane selected"}</span>
                     </div>
                     <label>
                       Position (in)
                       <input
                         type="number"
-                        min={0}
+                        min={rebarPlaneBounds[0] * inchesPerModelUnit}
                         max={
-                          (currentBounds[rebarAxis][1] -
-                            currentBounds[rebarAxis][0]) *
-                          inchesPerModelUnit
+                          rebarPlaneBounds[1] * inchesPerModelUnit
                         }
                         step={0.25}
                         value={Number(
                           (
-                            (rebarStart -
-                              currentBounds[rebarAxis][0]) *
-                            inchesPerModelUnit
+                            rebarStart * inchesPerModelUnit
                           ).toFixed(3),
                         )}
                         onChange={(event) =>
-                          setRebarStart(
-                            currentBounds[rebarAxis][0] +
-                              Number(event.target.value) /
-                                inchesPerModelUnit,
-                          )
+                          setRebarStart(Number(event.target.value) / inchesPerModelUnit)
                         }
                       />
                     </label>
                     <input
                       aria-label="Start section position"
                       type="range"
-                      min={0}
+                      min={rebarPlaneBounds[0] * inchesPerModelUnit}
                       max={
-                        (currentBounds[rebarAxis][1] -
-                          currentBounds[rebarAxis][0]) *
-                        inchesPerModelUnit
+                        rebarPlaneBounds[1] * inchesPerModelUnit
                       }
                       step={0.25}
                       value={
-                        (rebarStart - currentBounds[rebarAxis][0]) *
-                        inchesPerModelUnit
+                        rebarStart * inchesPerModelUnit
                       }
                       onChange={(event) =>
-                        setRebarStart(
-                          currentBounds[rebarAxis][0] +
-                            Number(event.target.value) / inchesPerModelUnit,
-                        )
+                        setRebarStart(Number(event.target.value) / inchesPerModelUnit)
                       }
                     />
                     <button
@@ -2518,25 +3075,16 @@ export default function ModelViewer() {
                       Position (in)
                       <input
                         type="number"
-                        min={0}
-                        max={
-                          (currentBounds[rebarAxis][1] -
-                            currentBounds[rebarAxis][0]) *
-                          inchesPerModelUnit
-                        }
+                        min={rebarPlaneBounds[0] * inchesPerModelUnit}
+                        max={rebarPlaneBounds[1] * inchesPerModelUnit}
                         step={0.25}
                         value={Number(
                           (
-                            (rebarEnd - currentBounds[rebarAxis][0]) *
-                            inchesPerModelUnit
+                            rebarEnd * inchesPerModelUnit
                           ).toFixed(3),
                         )}
                         onChange={(event) =>
-                          setRebarEnd(
-                            currentBounds[rebarAxis][0] +
-                              Number(event.target.value) /
-                                inchesPerModelUnit,
-                          )
+                          setRebarEnd(Number(event.target.value) / inchesPerModelUnit)
                         }
                       />
                     </label>
@@ -2544,19 +3092,15 @@ export default function ModelViewer() {
                       <div className="section-markers">
                         {rebarEndBookmarks.map((coordinate) => {
                           const span =
-                            currentBounds[rebarAxis][1] -
-                            currentBounds[rebarAxis][0];
+                            rebarPlaneBounds[1] - rebarPlaneBounds[0];
                           const left =
                             span <= 0
                               ? 0
                               : ((coordinate -
-                                    currentBounds[rebarAxis][0]) /
+                                    rebarPlaneBounds[0]) /
                                   span) *
                                 100;
-                          const inches =
-                            (coordinate -
-                              currentBounds[rebarAxis][0]) *
-                            inchesPerModelUnit;
+                          const inches = coordinate * inchesPerModelUnit;
                           return (
                             <button
                               type="button"
@@ -2574,26 +3118,50 @@ export default function ModelViewer() {
                       <input
                         aria-label="End section position"
                         type="range"
-                        min={0}
-                        max={
-                          (currentBounds[rebarAxis][1] -
-                            currentBounds[rebarAxis][0]) *
-                          inchesPerModelUnit
-                        }
+                        min={rebarPlaneBounds[0] * inchesPerModelUnit}
+                        max={rebarPlaneBounds[1] * inchesPerModelUnit}
                         step={0.25}
                         value={
-                          (rebarEnd - currentBounds[rebarAxis][0]) *
-                          inchesPerModelUnit
+                          rebarEnd * inchesPerModelUnit
                         }
                         onChange={(event) =>
-                          setRebarEnd(
-                            currentBounds[rebarAxis][0] +
-                              Number(event.target.value) /
-                                inchesPerModelUnit,
-                          )
+                          setRebarEnd(Number(event.target.value) / inchesPerModelUnit)
                         }
                       />
                     </div>
+                    {activeLappedWorkflow && (
+                      <div className="bar-number-field">
+                        <span className="eyebrow">BAR NUMBER</span>
+                        <div className="bar-number-buttons">
+                          {["5", "6", "7", "8", "9", "10"].map((number) => (
+                            <button
+                              type="button"
+                              key={number}
+                              className={
+                                rebarBarNumber === number ? "active" : ""
+                              }
+                              onClick={() => setRebarBarNumber(number)}
+                            >
+                              #{number}
+                            </button>
+                          ))}
+                        </div>
+                        <label>
+                          Other
+                          <input
+                            value={rebarBarNumber}
+                            onChange={(event) =>
+                              setRebarBarNumber(
+                                event.target.value.replace(
+                                  /[^0-9A-Za-z.-]/g,
+                                  "",
+                                ),
+                              )
+                            }
+                          />
+                        </label>
+                      </div>
+                    )}
                     <button
                       className="button primary wide"
                       onClick={() => {
@@ -2628,10 +3196,16 @@ export default function ModelViewer() {
                       <button
                         className="button primary wide"
                         onClick={() => {
-                          setRebarPathEnd({
-                            ...rebarPathEnd,
-                            [rebarAxis]: rebarEnd,
-                          });
+                          if (displayRebarPlane) {
+                            setRebarPathEnd(
+                              projectToPlaneOffset(
+                                rebarPathEnd,
+                                displayRebarPlane.origin,
+                                displayRebarPlane.normal,
+                                rebarEnd,
+                              ),
+                            );
+                          }
                           setRebarPhase("spacing");
                           setStatus(
                             "Existing path endpoint retained. Confirm the run details.",
@@ -2666,6 +3240,32 @@ export default function ModelViewer() {
                         }
                       />
                     </label>
+                    <div className="bar-number-field">
+                      <span className="eyebrow">BAR NUMBER</span>
+                      <div className="bar-number-buttons">
+                        {["5", "6", "7", "8", "9", "10"].map((number) => (
+                          <button
+                            type="button"
+                            key={number}
+                            className={rebarBarNumber === number ? "active" : ""}
+                            onClick={() => setRebarBarNumber(number)}
+                          >
+                            #{number}
+                          </button>
+                        ))}
+                      </div>
+                      <label>
+                        Other
+                        <input
+                          value={rebarBarNumber}
+                          onChange={(event) =>
+                            setRebarBarNumber(
+                              event.target.value.replace(/[^0-9A-Za-z.-]/g, ""),
+                            )
+                          }
+                        />
+                      </label>
+                    </div>
                     <small>
                       Bars follow the selected anchor path and finish exactly
                       at its endpoint.
@@ -2722,6 +3322,7 @@ export default function ModelViewer() {
                             <strong>{run.name}</strong>
                             <small>
                               {run.positions.length} bars ·{" "}
+                              #{run.barNumber ?? "5"} ·{" "}
                               {run.spacingInches}&quot; nominal
                               {run.lappedFromRunId ? " · lapped" : ""}
                             </small>
@@ -2789,6 +3390,13 @@ export default function ModelViewer() {
                     </button>
                   </section>
                 )}
+                <button
+                  className="button wide export-quantity"
+                  disabled={!rebarRuns.length}
+                  onClick={exportRebarQuantities}
+                >
+                  Export Rebar Quantity
+                </button>
               </>
             )}
           </div>
@@ -2861,6 +3469,7 @@ export default function ModelViewer() {
           slicingMode={activeTab === "slicing"}
           sliceBounds={currentBounds}
           rebarMode={activeTab === "rebar"}
+          showRebarPlaneNodes={rebarPhase === "plane-create"}
           rebarRuns={rebarRuns}
           selectedRebarRunIds={selectedRebarRunIds}
           showRebarLabels={showRebarLabels}
@@ -2896,10 +3505,21 @@ export default function ModelViewer() {
           rebarPathStart={rebarPathStart}
           rebarPathEnd={rebarPathEnd}
           rebarAxis={rebarAxis}
+          rebarDrawingPlane={
+            displayRebarPlane && activeRebarPlane
+              ? {
+                  ...displayRebarPlane,
+                  color: activeRebarPlane.color,
+                }
+              : null
+          }
+          rebarPlanePreviews={displayRebarPlanePreviews}
           rebarSection={
             activeTab !== "rebar" ||
             rebarPhase === "idle" ||
-            rebarPhase === "lap-source"
+            rebarPhase === "lap-source" ||
+            rebarPhase === "plane" ||
+            rebarPhase === "plane-create"
               ? null
               : rebarPhase === "end" ||
                   rebarPhase === "path-end" ||

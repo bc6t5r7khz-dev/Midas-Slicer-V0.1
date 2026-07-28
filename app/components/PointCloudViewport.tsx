@@ -54,6 +54,7 @@ type Props = {
   slicingMode: boolean;
   sliceBounds: Bounds | null;
   rebarMode: boolean;
+  showRebarPlaneNodes: boolean;
   rebarRuns: RebarRun[];
   selectedRebarRunIds: ReadonlySet<string>;
   showRebarLabels: boolean;
@@ -72,6 +73,17 @@ type Props = {
   rebarPathEnd: Vec3 | null;
   rebarAxis: "x" | "y" | "z";
   rebarSection: number | null;
+  rebarDrawingPlane: {
+    origin: Vec3;
+    normal: Vec3;
+    color: string;
+  } | null;
+  rebarPlanePreviews: Array<{
+    id: string;
+    origin: Vec3;
+    normal: Vec3;
+    color: string;
+  }>;
   inchesPerModelUnit: number | null;
   showConcreteSkin: boolean;
   lineAndBar: boolean;
@@ -563,6 +575,7 @@ export default function PointCloudViewport({
   slicingMode,
   sliceBounds,
   rebarMode,
+  showRebarPlaneNodes,
   rebarRuns,
   selectedRebarRunIds,
   showRebarLabels,
@@ -581,6 +594,8 @@ export default function PointCloudViewport({
   rebarPathEnd,
   rebarAxis,
   rebarSection,
+  rebarDrawingPlane,
+  rebarPlanePreviews,
   inchesPerModelUnit,
   showConcreteSkin,
   lineAndBar,
@@ -632,6 +647,7 @@ export default function PointCloudViewport({
   const selectedRebarEdgeIndexRef = useRef(selectedRebarEdgeIndex);
   const rebarAxisRef = useRef(rebarAxis);
   const rebarSectionRef = useRef(rebarSection);
+  const rebarDrawingPlaneRef = useRef(rebarDrawingPlane);
   const displayOffsetRef = useRef<Vec3>({ x: 0, y: 0, z: 0 });
   const toleranceRef = useRef(tolerance);
   const [renderError, setRenderError] = useState<string | null>(null);
@@ -656,6 +672,7 @@ export default function PointCloudViewport({
   selectedRebarEdgeIndexRef.current = selectedRebarEdgeIndex;
   rebarAxisRef.current = rebarAxis;
   rebarSectionRef.current = rebarSection;
+  rebarDrawingPlaneRef.current = rebarDrawingPlane;
   pendingRebarLineRef.current = pendingRebarLine;
   rebarSnapLinesRef.current = rebarSnapLines;
   rebarSnapRequiredRef.current = rebarSnapRequired;
@@ -1018,16 +1035,31 @@ export default function PointCloudViewport({
         }
         if (rebarSnapRequiredRef.current) return null;
         if (rebarSectionRef.current === null) return null;
+        const drawingPlane = rebarDrawingPlaneRef.current;
         const axis = rebarAxisRef.current;
-        const normal = new THREE.Vector3(
-          axis === "x" ? 1 : 0,
-          axis === "y" ? 1 : 0,
-          axis === "z" ? 1 : 0,
-        );
-        const plane = new THREE.Plane(
-          normal,
-          -(rebarSectionRef.current - displayOffsetRef.current[axis]),
-        );
+        const normal = drawingPlane
+          ? new THREE.Vector3(
+              drawingPlane.normal.x,
+              drawingPlane.normal.y,
+              drawingPlane.normal.z,
+            ).normalize()
+          : new THREE.Vector3(
+              axis === "x" ? 1 : 0,
+              axis === "y" ? 1 : 0,
+              axis === "z" ? 1 : 0,
+            );
+        const sectionPoint = drawingPlane
+          ? new THREE.Vector3(
+              drawingPlane.origin.x - displayOffsetRef.current.x,
+              drawingPlane.origin.y - displayOffsetRef.current.y,
+              drawingPlane.origin.z - displayOffsetRef.current.z,
+            ).addScaledVector(normal, rebarSectionRef.current)
+          : new THREE.Vector3(
+              axis === "x" ? rebarSectionRef.current - displayOffsetRef.current.x : 0,
+              axis === "y" ? rebarSectionRef.current - displayOffsetRef.current.y : 0,
+              axis === "z" ? rebarSectionRef.current - displayOffsetRef.current.z : 0,
+            );
+        const plane = new THREE.Plane(normal, -normal.dot(sectionPoint));
         const projected = raycaster.ray.intersectPlane(
           plane,
           new THREE.Vector3(),
@@ -1621,10 +1653,10 @@ export default function PointCloudViewport({
     const state = sceneRef.current;
     if (!state) return;
     const solidView = slicingMode || rebarMode;
-    state.points.visible = !solidView;
+    state.points.visible = !solidView || showRebarPlaneNodes;
     state.grid.visible = !solidView;
     state.faceGroup.visible = !(solidView && elementSurfaces.length > 0);
-  }, [elementSurfaces.length, rebarMode, slicingMode]);
+  }, [elementSurfaces.length, rebarMode, showRebarPlaneNodes, slicingMode]);
 
   useEffect(() => {
     const state = sceneRef.current;
@@ -2065,9 +2097,10 @@ export default function PointCloudViewport({
       joints: Vec3[],
       color: number,
       alwaysVisible = false,
+      radiusScale = 1,
     ) => {
       if (!segments.length || !inchesPerModelUnit) return;
-      const radius = 0.5 / inchesPerModelUnit;
+      const radius = (0.5 * radiusScale) / inchesPerModelUnit;
       const rodMaterial = new THREE.MeshBasicMaterial({
         color,
         depthTest: !alwaysVisible,
@@ -2120,8 +2153,7 @@ export default function PointCloudViewport({
       joints: Vec3[];
     };
     const rodsByColor = new Map<string, RodBuffers>();
-    const selectedRodSegments: Array<[Vec3, Vec3]> = [];
-    const selectedRodJoints: Vec3[] = [];
+    const selectedRodsByColor = new Map<string, RodBuffers>();
     for (const run of rebarRuns) {
       const runSelected = selectedRebarRunIds.has(run.id);
       const color = run.color ?? "#8f1717";
@@ -2129,14 +2161,21 @@ export default function PointCloudViewport({
         segments: [],
         joints: [],
       };
+      const selectedColorBuffers = selectedRodsByColor.get(color) ?? {
+        segments: [],
+        joints: [],
+      };
       if (!runSelected && !rodsByColor.has(color)) {
         rodsByColor.set(color, colorBuffers);
       }
+      if (runSelected && !selectedRodsByColor.has(color)) {
+        selectedRodsByColor.set(color, selectedColorBuffers);
+      }
       const targetSegments = runSelected
-        ? selectedRodSegments
+        ? selectedColorBuffers.segments
         : colorBuffers.segments;
       const targetJoints = runSelected
-        ? selectedRodJoints
+        ? selectedColorBuffers.joints
         : colorBuffers.joints;
       const lapOffset =
         inchesPerModelUnit && run.lapOffsetInches
@@ -2207,12 +2246,15 @@ export default function PointCloudViewport({
         new THREE.Color(color).getHex(),
       );
     });
-    addRodMeshes(
-      selectedRodSegments,
-      selectedRodJoints,
-      0xffbf47,
-      true,
-    );
+    selectedRodsByColor.forEach((buffers, color) => {
+      addRodMeshes(
+        buffers.segments,
+        buffers.joints,
+        new THREE.Color(color).getHex(),
+        true,
+        1.35,
+      );
+    });
 
     const draftSegments: Array<[Vec3, Vec3]> = [];
     const draftJoints: Vec3[] = [];
@@ -2329,33 +2371,66 @@ export default function PointCloudViewport({
       }
     }
 
-    if (rebarSection !== null && sliceBounds) {
-      const [first, second] =
-        rebarAxis === "x"
-          ? (["y", "z"] as const)
-          : rebarAxis === "y"
-            ? (["x", "z"] as const)
-            : (["x", "y"] as const);
+    const addPlanePatch = (
+      origin: Vec3,
+      normalValue: Vec3,
+      color: string | number,
+      opacity: number,
+      offset = 0,
+    ) => {
+      if (!sliceBounds) return;
+      const normal = new THREE.Vector3(
+        normalValue.x,
+        normalValue.y,
+        normalValue.z,
+      ).normalize();
+      const reference =
+        Math.abs(normal.z) < 0.92
+          ? new THREE.Vector3(0, 0, 1)
+          : new THREE.Vector3(0, 1, 0);
+      const u = reference.clone().cross(normal).normalize();
+      const v = normal.clone().cross(u).normalize();
+      const size =
+        Math.max(
+          sliceBounds.x[1] - sliceBounds.x[0],
+          sliceBounds.y[1] - sliceBounds.y[0],
+          sliceBounds.z[1] - sliceBounds.z[0],
+          1,
+        ) * 0.85;
+      const center = new THREE.Vector3(origin.x, origin.y, origin.z)
+        .addScaledVector(normal, offset);
       const corners = [
-        { [rebarAxis]: rebarSection, [first]: sliceBounds[first][0], [second]: sliceBounds[second][0] },
-        { [rebarAxis]: rebarSection, [first]: sliceBounds[first][1], [second]: sliceBounds[second][0] },
-        { [rebarAxis]: rebarSection, [first]: sliceBounds[first][1], [second]: sliceBounds[second][1] },
-        { [rebarAxis]: rebarSection, [first]: sliceBounds[first][0], [second]: sliceBounds[second][1] },
-      ] as unknown as Vec3[];
+        center.clone().addScaledVector(u, -size).addScaledVector(v, -size),
+        center.clone().addScaledVector(u, size).addScaledVector(v, -size),
+        center.clone().addScaledVector(u, size).addScaledVector(v, size),
+        center.clone().addScaledVector(u, -size).addScaledVector(v, size),
+      ].map((point) => ({ x: point.x, y: point.y, z: point.z }));
       const geometry = triangulatePolygon(corners, displayOffset);
       state.rebarGroup.add(
         new THREE.Mesh(
           geometry,
           new THREE.MeshBasicMaterial({
-            color: 0x2f9dff,
-            opacity: 0.2,
+            color,
+            opacity,
             transparent: true,
             depthWrite: false,
             side: THREE.DoubleSide,
           }),
         ),
       );
-      addPolyline(corners, 0x2f9dff, 0.9);
+      addPolyline(corners, new THREE.Color(color).getHex(), 0.9);
+    };
+    rebarPlanePreviews.forEach((plane) =>
+      addPlanePatch(plane.origin, plane.normal, plane.color, 0.14),
+    );
+    if (rebarSection !== null && rebarDrawingPlane) {
+      addPlanePatch(
+        rebarDrawingPlane.origin,
+        rebarDrawingPlane.normal,
+        rebarDrawingPlane.color,
+        0.22,
+        rebarSection,
+      );
     }
   }, [
     displayOffset,
@@ -2368,6 +2443,8 @@ export default function PointCloudViewport({
     rebarMode,
     rebarPathEnd,
     rebarPathStart,
+    rebarDrawingPlane,
+    rebarPlanePreviews,
     rebarRuns,
     rebarSection,
     selectedRebarRunIds,

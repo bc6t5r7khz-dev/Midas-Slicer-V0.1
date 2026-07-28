@@ -290,6 +290,194 @@ export function createCoverOutline(
   );
 }
 
+const add3 = (a: Vec3, b: Vec3): Vec3 => ({
+  x: a.x + b.x,
+  y: a.y + b.y,
+  z: a.z + b.z,
+});
+const subtract3 = (a: Vec3, b: Vec3): Vec3 => ({
+  x: a.x - b.x,
+  y: a.y - b.y,
+  z: a.z - b.z,
+});
+const scale3 = (value: Vec3, amount: number): Vec3 => ({
+  x: value.x * amount,
+  y: value.y * amount,
+  z: value.z * amount,
+});
+const dot3 = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z;
+const cross3 = (a: Vec3, b: Vec3): Vec3 => ({
+  x: a.y * b.z - a.z * b.y,
+  y: a.z * b.x - a.x * b.z,
+  z: a.x * b.y - a.y * b.x,
+});
+const normalize3 = (value: Vec3): Vec3 => {
+  const length = Math.hypot(value.x, value.y, value.z) || 1;
+  return scale3(value, 1 / length);
+};
+
+/**
+ * Intersects solid elements with an arbitrary plane and returns every closed
+ * concrete boundary loop, inset in the plane itself. This is the plane-family
+ * equivalent of createCoverOutlines and supports skewed/non-global sections.
+ */
+export function createPlaneCoverOutlines(
+  nodes: ModelNode[],
+  elements: ModelElement[],
+  origin: Vec3,
+  normalInput: Vec3,
+  coverModelUnits: number,
+): Vec3[][] {
+  const normal = normalize3(normalInput);
+  const reference =
+    Math.abs(normal.z) < 0.92
+      ? ({ x: 0, y: 0, z: 1 } as Vec3)
+      : ({ x: 0, y: 1, z: 0 } as Vec3);
+  const u = normalize3(cross3(reference, normal));
+  const v = normalize3(cross3(normal, u));
+  const nodeMap = new Map(
+    nodes.map((node) => [node.id, node.local ?? node.global]),
+  );
+  const scale = Math.max(
+    ...[...nodeMap.values()].map((point) =>
+      Math.hypot(point.x - origin.x, point.y - origin.y, point.z - origin.z),
+    ),
+    1,
+  );
+  const tolerance = scale * 1e-7;
+  const precision = 1 / Math.max(tolerance, 1e-8);
+  const edgeCounts = new Map<
+    string,
+    { segment: [Vec3, Vec3]; count: number }
+  >();
+
+  for (const element of elements) {
+    if (element.type !== "SOLID") continue;
+    const vertices = element.nodeIds.map((id) => nodeMap.get(id));
+    if (vertices.some((point) => !point)) continue;
+    const intersections: Vec3[] = [];
+    for (const [firstIndex, secondIndex] of solidEdges(vertices.length)) {
+      const first = vertices[firstIndex]!;
+      const second = vertices[secondIndex]!;
+      const firstDistance = dot3(subtract3(first, origin), normal);
+      const secondDistance = dot3(subtract3(second, origin), normal);
+      if (Math.abs(firstDistance) <= tolerance) intersections.push(first);
+      if (firstDistance * secondDistance < 0) {
+        const amount = firstDistance / (firstDistance - secondDistance);
+        intersections.push({
+          x: first.x + (second.x - first.x) * amount,
+          y: first.y + (second.y - first.y) * amount,
+          z: first.z + (second.z - first.z) * amount,
+        });
+      }
+    }
+    const unique = intersections.filter(
+      (point, index) =>
+        intersections.findIndex(
+          (candidate) =>
+            pointKey(candidate, precision) === pointKey(point, precision),
+        ) === index,
+    );
+    if (unique.length < 3) continue;
+    const center = unique.reduce(
+      (sum, point) => ({
+        a: sum.a + dot3(subtract3(point, origin), u) / unique.length,
+        b: sum.b + dot3(subtract3(point, origin), v) / unique.length,
+      }),
+      { a: 0, b: 0 },
+    );
+    unique.sort((first, second) => {
+      const firstOffset = subtract3(first, origin);
+      const secondOffset = subtract3(second, origin);
+      return (
+        Math.atan2(dot3(firstOffset, v) - center.b, dot3(firstOffset, u) - center.a) -
+        Math.atan2(dot3(secondOffset, v) - center.b, dot3(secondOffset, u) - center.a)
+      );
+    });
+    unique.forEach((point, index) => {
+      const next = unique[(index + 1) % unique.length];
+      const firstKey = pointKey(point, precision);
+      const secondKey = pointKey(next, precision);
+      const key =
+        firstKey < secondKey
+          ? `${firstKey}|${secondKey}`
+          : `${secondKey}|${firstKey}`;
+      const current = edgeCounts.get(key);
+      edgeCounts.set(key, {
+        segment: current?.segment ?? [point, next],
+        count: (current?.count ?? 0) + 1,
+      });
+    });
+  }
+
+  const segments = [...edgeCounts.values()]
+    .filter((entry) => entry.count % 2 === 1)
+    .map((entry) => entry.segment);
+  const unused = new Set(segments.map((_, index) => index));
+  const loops: Vec3[][] = [];
+  while (unused.size) {
+    const startIndex = unused.values().next().value as number;
+    unused.delete(startIndex);
+    const [start, next] = segments[startIndex];
+    const loop = [start, next];
+    let current = next;
+    while (loop.length <= segments.length + 1) {
+      const currentKey = pointKey(current, precision);
+      const match = [...unused].find((index) => {
+        const [a, b] = segments[index];
+        return (
+          pointKey(a, precision) === currentKey ||
+          pointKey(b, precision) === currentKey
+        );
+      });
+      if (match === undefined) break;
+      unused.delete(match);
+      const [a, b] = segments[match];
+      current = pointKey(a, precision) === currentKey ? b : a;
+      if (pointKey(current, precision) === pointKey(loop[0], precision)) break;
+      loop.push(current);
+    }
+    if (loop.length >= 3) loops.push(loop);
+  }
+
+  return loops
+    .map((loop) =>
+      loop.map((point) => {
+        const delta = subtract3(point, origin);
+        return { a: dot3(delta, u), b: dot3(delta, v) };
+      }),
+    )
+    .sort(
+      (a, b) =>
+        Math.abs(
+          b.reduce((sum, point, index) => {
+            const next = b[(index + 1) % b.length];
+            return sum + point.a * next.b - next.a * point.b;
+          }, 0),
+        ) -
+        Math.abs(
+          a.reduce((sum, point, index) => {
+            const next = a[(index + 1) % a.length];
+            return sum + point.a * next.b - next.a * point.b;
+          }, 0),
+        ),
+    )
+    .map((loop, loopIndex) => {
+      const signedArea = loop.reduce((sum, point, index) => {
+        const next = loop[(index + 1) % loop.length];
+        return sum + point.a * next.b - next.a * point.b;
+      }, 0);
+      const oriented = signedArea < 0 ? [...loop].reverse() : loop;
+      const inset = insetConvexPolygon(
+        oriented,
+        loopIndex === 0 ? coverModelUnits : -coverModelUnits,
+      );
+      return inset.map((point) =>
+        add3(origin, add3(scale3(u, point.a), scale3(v, point.b))),
+      );
+    });
+}
+
 export function distributeBars(
   start: number,
   end: number,

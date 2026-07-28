@@ -509,6 +509,79 @@ button {
   padding-left: 8px;
 }
 
+.rebar-plane-list {
+  display: grid;
+  gap: 5px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.rebar-plane-list button,
+.active-plane-chip {
+  display: grid;
+  grid-template-columns: 13px 1fr;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #08141b;
+  color: var(--text);
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.rebar-plane-list button {
+  cursor: pointer;
+}
+
+.rebar-plane-list button:hover,
+.rebar-plane-list button.selected {
+  border-color: var(--cyan-strong);
+  background: #102a34;
+}
+
+.rebar-plane-list i,
+.active-plane-chip i {
+  width: 12px;
+  height: 22px;
+  border: 1px solid #ffffff66;
+  border-radius: 2px;
+}
+
+.bar-number-field {
+  display: grid;
+  gap: 7px;
+  padding-top: 3px;
+}
+
+.bar-number-buttons {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+
+.bar-number-buttons button {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #08141b;
+  color: var(--muted);
+  padding: 6px 2px;
+  font: 10px Consolas, monospace;
+  cursor: pointer;
+}
+
+.bar-number-buttons button.active {
+  border-color: var(--cyan-strong);
+  background: #12323d;
+  color: var(--text);
+}
+
+.export-quantity {
+  margin-top: 8px;
+}
+
 .rebar-color-picker {
   margin: 12px;
   padding: 11px;

@@ -68,10 +68,26 @@ export type RebarLine = {
   closed?: boolean;
 };
 
+export type RebarPlane = {
+  id: string;
+  name: string;
+  color: string;
+  /** Stable model-space point on the plane family. */
+  objectOrigin: Vec3;
+  /** Stable model-space normal. Positive offsets move along this vector. */
+  objectNormal: Vec3;
+  /** The two model nodes originally used to define the vertical plane. */
+  nodeIds: number[];
+};
+
 export type RebarRun = {
   id: string;
   name: string;
   color?: string;
+  barNumber?: string;
+  planeId?: string;
+  startOffset?: number;
+  endOffset?: number;
   axis: Axis;
   start: number;
   end: number;
