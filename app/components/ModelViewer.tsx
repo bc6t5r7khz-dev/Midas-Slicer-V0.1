@@ -59,8 +59,8 @@ import {
 import PointCloudViewport from "./PointCloudViewport";
 
 const TABS: Array<{ id: WorkflowTab; label: string; number: string }> = [
-  { id: "volume", label: "Volume Definition", number: "01" },
-  { id: "coordinates", label: "Coordinates", number: "02" },
+  { id: "volume", label: "Model", number: "01" },
+  { id: "coordinates", label: "Axes + Scale", number: "02" },
   { id: "slicing", label: "Slicing", number: "03" },
   { id: "rebar", label: "Rebar", number: "04" },
 ];
@@ -147,12 +147,21 @@ const reframeRebarRun = (
     (run.pathEnd
       ? reframePoint(run.pathEnd, fromBasis, null)
       : undefined);
+  const objectPathPoints =
+    run.objectPathPoints ??
+    run.pathPoints?.map((point) => reframePoint(point, fromBasis, null)) ??
+    (objectPathStart && objectPathEnd
+      ? [objectPathStart, objectPathEnd]
+      : undefined);
   const pathStart = objectPathStart
     ? reframePoint(objectPathStart, null, toBasis)
     : undefined;
   const pathEnd = objectPathEnd
     ? reframePoint(objectPathEnd, null, toBasis)
     : undefined;
+  const pathPoints = objectPathPoints?.map((point) =>
+    reframePoint(point, null, toBasis),
+  );
   let distributionVector = run.distributionVector
     ? reframeDirection(run.distributionVector, fromBasis, toBasis)
     : undefined;
@@ -176,6 +185,8 @@ const reframeRebarRun = (
     objectLines,
     objectPathStart,
     objectPathEnd,
+    objectPathPoints,
+    pathPoints,
     distributionVector,
     lines: objectLines.map((line) =>
       reframeRebarLine(line, null, toBasis),
@@ -375,6 +386,8 @@ export default function ModelViewer() {
   const [topRebarPlaneDismissed, setTopRebarPlaneDismissed] = useState(false);
   const [activeRebarPlaneId, setActiveRebarPlaneId] =
     useState<string | null>(null);
+  const [previewedRebarPlaneId, setPreviewedRebarPlaneId] =
+    useState<string | null>(null);
   const [rebarPlaneDraftNodeIds, setRebarPlaneDraftNodeIds] = useState<
     number[]
   >([]);
@@ -391,6 +404,7 @@ export default function ModelViewer() {
     | "path-start"
     | "end"
     | "path-end"
+    | "path-review"
     | "spacing"
   >("idle");
   const [rebarWorkflowKind, setRebarWorkflowKind] = useState<
@@ -411,6 +425,7 @@ export default function ModelViewer() {
   const [rebarSpacing, setRebarSpacing] = useState(12);
   const [rebarPathStart, setRebarPathStart] = useState<Vec3 | null>(null);
   const [rebarPathEnd, setRebarPathEnd] = useState<Vec3 | null>(null);
+  const [rebarPathPoints, setRebarPathPoints] = useState<Vec3[]>([]);
   const [selectedRebarRunIds, setSelectedRebarRunIds] = useState<Set<string>>(
     new Set(),
   );
@@ -534,6 +549,9 @@ export default function ModelViewer() {
       setRebarPathEnd((current) =>
         current ? reframePoint(current, fromBasis, toBasis) : null,
       );
+      setRebarPathPoints((current) =>
+        current.map((point) => reframePoint(point, fromBasis, toBasis)),
+      );
     },
     [],
   );
@@ -549,7 +567,11 @@ export default function ModelViewer() {
       !basis ||
       !allNodes.length ||
       topRebarPlaneDismissed ||
-      rebarPlanes.some((plane) => plane.id === "auto-top-horizontal")
+      rebarPlanes.some(
+        (plane) =>
+          plane.id === "auto-top-horizontal" ||
+          plane.name.trim().toLowerCase() === "top horizontal",
+      )
     ) {
       return;
     }
@@ -686,6 +708,23 @@ export default function ModelViewer() {
             ]
           : [];
       }
+      if (activeTab === "rebar" && previewedRebarPlaneId) {
+        const plane = rebarPlanes.find(
+          (candidate) => candidate.id === previewedRebarPlaneId,
+        );
+        return plane
+          ? [
+              {
+                id: plane.id,
+                color: plane.color,
+                origin: reframePoint(plane.objectOrigin, null, basis),
+                normal: normalize(
+                  reframeDirection(plane.objectNormal, null, basis),
+                ),
+              },
+            ]
+          : [];
+      }
       return [];
     },
     [
@@ -694,6 +733,7 @@ export default function ModelViewer() {
       basis,
       rebarPhase,
       rebarPlanes,
+      previewedRebarPlaneId,
       selectedSlicingPlaneId,
     ],
   );
@@ -724,11 +764,14 @@ export default function ModelViewer() {
       ),
     );
   }, [slicingPlaneBounds]);
-  const rebarEndBookmarks = useMemo(
+  const rebarSectionBookmarks = useMemo(
     () =>
       rebarRuns
         .filter((run) => run.planeId === activeRebarPlaneId)
-        .map((run) => run.endOffset ?? run.end)
+        .flatMap((run) => [
+          run.startOffset ?? run.start,
+          run.endOffset ?? run.end,
+        ])
         .filter(
           (value, index, values) =>
             values.findIndex(
@@ -773,7 +816,9 @@ export default function ModelViewer() {
       return [];
     }
     const offset =
-      rebarPhase === "path-end" || rebarPhase === "spacing"
+      rebarPhase === "path-end" ||
+      rebarPhase === "path-review" ||
+      rebarPhase === "spacing"
         ? rebarEnd
         : rebarStart;
     return createPlaneCoverOutlines(
@@ -809,7 +854,9 @@ export default function ModelViewer() {
       return [];
     }
     const offset =
-      rebarPhase === "path-end" || rebarPhase === "spacing"
+      rebarPhase === "path-end" ||
+      rebarPhase === "path-review" ||
+      rebarPhase === "spacing"
         ? rebarEnd
         : rebarStart;
     return createPlaneCoverOutlines(
@@ -862,6 +909,7 @@ export default function ModelViewer() {
     setRebarSecondaryOffsetInches(4);
     setTopRebarPlaneDismissed(false);
     setActiveRebarPlaneId(null);
+    setPreviewedRebarPlaneId(null);
     setRebarPlaneDraftNodeIds([]);
     setLineAndBar(false);
     setRebarPhase("idle");
@@ -966,6 +1014,7 @@ export default function ModelViewer() {
         setActiveRebarPlaneId(
           migratedRebar.planes[0]?.id ?? null,
         );
+        setPreviewedRebarPlaneId(null);
         setShowConcreteSkin(saved.showConcreteSkin ?? true);
         setLineAndBar(saved.lineAndBar ?? false);
         setShowRebarLabels(saved.showRebarLabels ?? false);
@@ -1212,6 +1261,7 @@ export default function ModelViewer() {
       );
       setTopRebarPlaneDismissed(saved.topRebarPlaneDismissed ?? false);
       setActiveRebarPlaneId(migrated.planes[0]?.id ?? null);
+      setPreviewedRebarPlaneId(null);
       setShowConcreteSkin(saved.showConcreteSkin ?? true);
       setLineAndBar(saved.lineAndBar ?? false);
       setShowRebarLabels(saved.showRebarLabels ?? false);
@@ -1559,6 +1609,7 @@ export default function ModelViewer() {
         };
         setRebarPlanes((current) => [...current, plane]);
         setActiveRebarPlaneId(plane.id);
+        setPreviewedRebarPlaneId(plane.id);
         setRebarPlaneDraftNodeIds([]);
         setRebarStart(0);
         setRebarEnd(0);
@@ -1682,13 +1733,19 @@ export default function ModelViewer() {
     setRebarWorkflowKind("create");
     setRebarReferenceRunId(null);
     setEditingRebarRunId(null);
-    setRebarPhase("plane");
     setRebarLines([]);
     setPendingRebarLine(null);
     setRebarPathStart(null);
     setRebarPathEnd(null);
+    setRebarPathPoints([]);
     setRebarBarNumber("5");
-    setStatus("Choose a vertical drawing plane or add a new one.");
+    if (activeRebarPlaneId) {
+      chooseRebarPlane(activeRebarPlaneId);
+      setStatus("Selected plane retained. Choose the start section.");
+    } else {
+      setRebarPhase("plane");
+      setStatus("Choose a drawing plane or add a new one.");
+    }
   };
 
   const chooseRebarPlane = (planeId: string) => {
@@ -1696,6 +1753,7 @@ export default function ModelViewer() {
       .reverse()
       .find((run) => run.planeId === planeId);
     setActiveRebarPlaneId(planeId);
+    setPreviewedRebarPlaneId(planeId);
     setRebarStart(previous?.startOffset ?? 0);
     setRebarEnd(previous?.endOffset ?? previous?.startOffset ?? 0);
     setRebarPhase("start");
@@ -1707,6 +1765,10 @@ export default function ModelViewer() {
   };
 
   const selectRebarPlane = (planeId: string) => {
+    if (editingRebarRunId && planeId !== activeRebarPlaneId) {
+      setStatus("A bar's drawing plane is locked while editing.");
+      return;
+    }
     if (
       activeLappedWorkflow &&
       rebarPhase !== "idle" &&
@@ -1720,6 +1782,7 @@ export default function ModelViewer() {
       return;
     }
     setActiveRebarPlaneId(planeId);
+    setPreviewedRebarPlaneId(planeId);
   };
 
   const deleteActiveRebarPlane = () => {
@@ -1771,6 +1834,9 @@ export default function ModelViewer() {
       setTopRebarPlaneDismissed(true);
     }
     setActiveRebarPlaneId(nextPlanes[0]?.id ?? null);
+    setPreviewedRebarPlaneId((current) =>
+      current === activeRebarPlaneId ? null : current,
+    );
     setStatus(
       associated.length
         ? `${plane.name} deleted. ${associated.length} associated bar run${
@@ -1931,6 +1997,7 @@ export default function ModelViewer() {
     setPendingRebarLine(null);
     setRebarPathStart(null);
     setRebarPathEnd(null);
+    setRebarPathPoints([]);
     setSelectedRebarRunIds(new Set([source.id]));
     setRebarPhase("start");
     setStatus(
@@ -1960,8 +2027,12 @@ export default function ModelViewer() {
     );
     setRebarPathStart(run.pathStart ?? null);
     setRebarPathEnd(run.pathEnd ?? null);
+    setRebarPathPoints(
+      run.pathPoints ??
+        (run.pathStart && run.pathEnd ? [run.pathStart, run.pathEnd] : []),
+    );
     setSelectedRebarRunIds(new Set([run.id]));
-    setRebarPhase(run.lappedFromRunId ? "start" : run.planeId ? "plane" : "start");
+    setRebarPhase("start");
     setStatus(`Editing ${run.name}. Confirm or update each step.`);
   };
 
@@ -1994,13 +2065,15 @@ export default function ModelViewer() {
           },
     );
     if (editingRun && rebarPathStart) {
-      setRebarPathStart(
-        projectToPlaneOffset(
-          rebarPathStart,
-          displayRebarPlane.origin,
-          displayRebarPlane.normal,
-          rebarStart,
-        ),
+      const projectedStart = projectToPlaneOffset(
+        rebarPathStart,
+        displayRebarPlane.origin,
+        displayRebarPlane.normal,
+        rebarStart,
+      );
+      setRebarPathStart(projectedStart);
+      setRebarPathPoints((current) =>
+        current.length ? [projectedStart, ...current.slice(1)] : current,
       );
     }
     setRebarLines([]);
@@ -2033,6 +2106,7 @@ export default function ModelViewer() {
     }
     if (rebarPhase === "path-start") {
       setRebarPathStart(point);
+      setRebarPathPoints([point]);
       setRebarPhase("end");
       setStatus("Start anchor selected. Choose the end section.");
       return;
@@ -2047,8 +2121,16 @@ export default function ModelViewer() {
           )
         : point;
       setRebarPathEnd(endpoint);
-      setRebarPhase("spacing");
-      setStatus("Spacing path defined. Set the nominal spacing.");
+      setRebarPathPoints((current) => [
+        ...(current.length
+          ? current
+          : rebarPathStart
+            ? [rebarPathStart]
+            : []),
+        endpoint,
+      ]);
+      setRebarPhase("path-review");
+      setStatus("Keypoint added. Add another depth and anchor, or complete the path.");
     }
   };
 
@@ -2056,8 +2138,19 @@ export default function ModelViewer() {
     pathStartOverride?: Vec3,
     pathEndOverride?: Vec3,
   ) => {
-    const pathStart = pathStartOverride ?? rebarPathStart;
-    const pathEnd = pathEndOverride ?? rebarPathEnd;
+    const pathStart = pathStartOverride ?? rebarPathPoints[0] ?? rebarPathStart;
+    const pathEnd =
+      pathEndOverride ??
+      rebarPathPoints[rebarPathPoints.length - 1] ??
+      rebarPathEnd;
+    const pathPoints =
+      pathStartOverride && pathEndOverride
+        ? [pathStartOverride, pathEndOverride]
+        : rebarPathPoints.length >= 2
+          ? rebarPathPoints
+          : pathStart && pathEnd
+            ? [pathStart, pathEnd]
+            : [];
     if (
       !inchesPerModelUnit ||
       !rebarLines.length ||
@@ -2067,19 +2160,27 @@ export default function ModelViewer() {
       return;
     }
     const pathDelta = subtract(pathEnd, pathStart);
-    const pathLength = Math.hypot(
-      pathDelta.x,
-      pathDelta.y,
-      pathDelta.z,
-    );
+    const chordLength =
+      Math.hypot(pathDelta.x, pathDelta.y, pathDelta.z) || 1;
+    const pathLength = pathPoints.slice(1).reduce((total, point, index) => {
+      const previous = pathPoints[index];
+      return (
+        total +
+        Math.hypot(
+          point.x - previous.x,
+          point.y - previous.y,
+          point.z - previous.z,
+        )
+      );
+    }, 0);
     if (pathLength <= 1e-12) {
       setError("The rebar spacing path needs a measurable length.");
       return;
     }
     const distributionVector = {
-      x: pathDelta.x / pathLength,
-      y: pathDelta.y / pathLength,
-      z: pathDelta.z / pathLength,
+      x: pathDelta.x / chordLength,
+      y: pathDelta.y / chordLength,
+      z: pathDelta.z / chordLength,
     };
     const editingRun = editingRebarRunId
       ? rebarRuns.find((candidate) => candidate.id === editingRebarRunId)
@@ -2107,11 +2208,15 @@ export default function ModelViewer() {
       distributionVector,
       pathStart,
       pathEnd,
+      pathPoints,
       objectLines: rebarLines.map((line) =>
         reframeRebarLine(line, basis, null),
       ),
       objectPathStart: reframePoint(pathStart, basis, null),
       objectPathEnd: reframePoint(pathEnd, basis, null),
+      objectPathPoints: pathPoints.map((point) =>
+        reframePoint(point, basis, null),
+      ),
       spacingInches: spacing,
       lappedFromRunId: isLapped
         ? referenceRun?.id ?? editingRun?.lappedFromRunId
@@ -2144,6 +2249,7 @@ export default function ModelViewer() {
     setPendingRebarLine(null);
     setRebarPathStart(null);
     setRebarPathEnd(null);
+    setRebarPathPoints([]);
     setRebarName(`Bar Run ${rebarRuns.length + (editingRun ? 1 : 2)}`);
     setRebarBarNumber("5");
     setStatus(
@@ -2195,6 +2301,7 @@ export default function ModelViewer() {
     setPendingRebarLine(null);
     setRebarPathStart(null);
     setRebarPathEnd(null);
+    setRebarPathPoints([]);
     setRebarPlaneDraftNodeIds([]);
     setStatus("Rebar workflow cancelled.");
   }, []);
@@ -2230,8 +2337,13 @@ export default function ModelViewer() {
         setPendingRebarLine(null);
         setRebarPhase("start");
       } else if (rebarPhase === "spacing") {
-        setRebarPathEnd(null);
-        setRebarPhase("path-end");
+        setRebarPhase("path-review");
+      } else if (rebarPhase === "path-review") {
+        setRebarPathPoints((current) => current.slice(0, -1));
+        setRebarPathEnd(
+          rebarPathPoints[rebarPathPoints.length - 2] ?? null,
+        );
+        setRebarPhase("end");
       } else if (rebarPhase === "path-end") {
         setRebarPhase("end");
       } else if (rebarPhase === "end") {
@@ -2241,8 +2353,9 @@ export default function ModelViewer() {
           setRebarLines([]);
           setRebarPhase("lines");
         } else {
-          setRebarPathStart(null);
-          setRebarPhase("path-start");
+          setRebarPhase(
+            rebarPathPoints.length > 1 ? "path-review" : "path-start",
+          );
         }
       } else if (rebarPhase === "path-start") {
         const line = rebarLines[0] ?? null;
@@ -2250,7 +2363,9 @@ export default function ModelViewer() {
         setRebarLines([]);
         setRebarPhase("lines");
       } else if (rebarPhase === "start") {
-        setRebarPhase(activeLappedWorkflow ? "idle" : "plane");
+        setRebarPhase(
+          activeLappedWorkflow || editingRebarRunId ? "idle" : "plane",
+        );
       } else if (rebarPhase === "plane-create") {
         if (rebarPlaneDraftNodeIds.length) {
           setRebarPlaneDraftNodeIds((current) => current.slice(0, -1));
@@ -2272,6 +2387,8 @@ export default function ModelViewer() {
     activeLappedWorkflow,
     pendingRebarLine,
     rebarLines,
+    rebarPathPoints,
+    editingRebarRunId,
     rebarPlaneDraftNodeIds.length,
     rebarPhase,
     rebarRuns.length,
@@ -2747,6 +2864,14 @@ export default function ModelViewer() {
     <main
       className="app-shell"
       onClick={(event) => {
+        const target = event.target as HTMLElement;
+        if (
+          activeTab === "rebar" &&
+          !target.closest(".viewport") &&
+          !target.closest("[data-plane-control]")
+        ) {
+          setPreviewedRebarPlaneId(null);
+        }
         if (
           activeTab !== "rebar" ||
           rebarPhase !== "idle" ||
@@ -2754,7 +2879,6 @@ export default function ModelViewer() {
         ) {
           return;
         }
-        const target = event.target as HTMLElement;
         if (target.closest("[data-rebar-selection-control]")) return;
         setSelectedRebarRunIds(new Set());
       }}
@@ -2848,7 +2972,17 @@ export default function ModelViewer() {
         </div>
       </header>
 
-      <aside className="control-rail">
+      <aside
+        className="control-rail"
+        onClickCapture={(event) => {
+          if (
+            activeTab === "rebar" &&
+            !(event.target as HTMLElement).closest("[data-plane-control]")
+          ) {
+            setPreviewedRebarPlaneId(null);
+          }
+        }}
+      >
         <nav className="workflow-tabs" aria-label="Model workflow">
           {TABS.map((tab) => (
             <button
@@ -3525,7 +3659,8 @@ export default function ModelViewer() {
               </div>
             ) : (
               <>
-                <label className="skin-toggle">
+                <div className="rebar-view-options" aria-label="View options">
+                <label className="skin-toggle" title="Show the concrete surface">
                   <input
                     type="checkbox"
                     checked={showConcreteSkin}
@@ -3536,7 +3671,7 @@ export default function ModelViewer() {
                   />
                   Show concrete skin
                 </label>
-                <label className="skin-toggle">
+                <label className="skin-toggle" title="Show only model outlines and reinforcement">
                   <input
                     type="checkbox"
                     checked={lineAndBar}
@@ -3546,7 +3681,7 @@ export default function ModelViewer() {
                   />
                   Line and Bar
                 </label>
-                <label className="skin-toggle">
+                <label className="skin-toggle" title="Show compact names beside bar runs">
                   <input
                     type="checkbox"
                     checked={showRebarLabels}
@@ -3556,6 +3691,7 @@ export default function ModelViewer() {
                   />
                   Show bar labels
                 </label>
+                </div>
                 <section className="cover-offset-controls">
                   <span className="eyebrow">PERIMETER SNAP OFFSETS</span>
                   <div>
@@ -3589,7 +3725,10 @@ export default function ModelViewer() {
                     </label>
                   </div>
                 </section>
-                <section className="rebar-plane-manager">
+                <section
+                  className="rebar-plane-manager"
+                  data-plane-control
+                >
                   <div className="section-heading">
                     <span className="eyebrow">PLANES</span>
                     <strong>{rebarPlanes.length}</strong>
@@ -3599,7 +3738,7 @@ export default function ModelViewer() {
                       <div
                         key={plane.id}
                         className={`rebar-plane-row ${
-                          activeRebarPlaneId === plane.id ? "selected" : ""
+                          previewedRebarPlaneId === plane.id ? "selected" : ""
                         }`}
                       >
                         {renamingRebarPlaneId === plane.id ? (
@@ -3634,12 +3773,21 @@ export default function ModelViewer() {
                         ) : (
                           <button
                             type="button"
+                            disabled={
+                              Boolean(editingRebarRunId) &&
+                              plane.id !== activeRebarPlaneId
+                            }
                             onClick={() => selectRebarPlane(plane.id)}
                             onDoubleClick={(event) => {
                               event.stopPropagation();
                               setRenamingRebarPlaneId(plane.id);
                             }}
-                            title="Double-click the name to rename"
+                            title={
+                              editingRebarRunId &&
+                              plane.id !== activeRebarPlaneId
+                                ? "The drawing plane is locked while editing"
+                                : "Click to show this plane; double-click to rename"
+                            }
                           >
                             <i style={{ background: plane.color }} />
                             <span>{plane.name}</span>
@@ -3685,13 +3833,22 @@ export default function ModelViewer() {
                     <button
                       className="button primary"
                       onClick={beginCreateRebar}
+                      title={
+                        activeRebarPlane
+                          ? `Start on ${activeRebarPlane.name}`
+                          : "Choose a plane and create a bar run"
+                      }
                     >
-                      Add New Bar
+                      Add Bar
                     </button>
                     <button
                       className="button"
                       disabled={!rebarRuns.length}
                       onClick={() => {
+                        if (selectedRebarRun) {
+                          beginLappedRebar(selectedRebarRun);
+                          return;
+                        }
                         setRebarWorkflowKind("lap");
                         setRebarReferenceRunId(null);
                         setEditingRebarRunId(null);
@@ -3700,8 +3857,15 @@ export default function ModelViewer() {
                           "Select the existing bar run that this bar will lap.",
                         );
                       }}
+                      title={
+                        selectedRebarRun
+                          ? `Create a lap from ${selectedRebarRun.name}`
+                          : "Select an existing bar run to lap"
+                      }
                     >
-                      Add Lapped Bar
+                      {selectedRebarRun
+                        ? `Lap ${selectedRebarRun.name}`
+                        : "Add Lapped Bar"}
                     </button>
                   </div>
                 )}
@@ -3789,21 +3953,45 @@ export default function ModelViewer() {
                         }
                       />
                     </label>
-                    <input
-                      aria-label="Start section position"
-                      type="range"
-                      min={rebarPlaneBounds[0] * inchesPerModelUnit}
-                      max={
-                        rebarPlaneBounds[1] * inchesPerModelUnit
-                      }
-                      step={0.25}
-                      value={
-                        rebarStart * inchesPerModelUnit
-                      }
-                      onChange={(event) =>
-                        setRebarStart(Number(event.target.value) / inchesPerModelUnit)
-                      }
-                    />
+                    <div className="range-with-markers">
+                      <div className="section-markers">
+                        {rebarSectionBookmarks.map((coordinate) => {
+                          const span =
+                            rebarPlaneBounds[1] - rebarPlaneBounds[0];
+                          const left =
+                            span <= 0
+                              ? 0
+                              : ((coordinate - rebarPlaneBounds[0]) / span) *
+                                100;
+                          const inches = coordinate * inchesPerModelUnit;
+                          return (
+                            <button
+                              type="button"
+                              key={coordinate}
+                              style={{ left: `${left}%` }}
+                              title={`Use saved section ${inches.toFixed(3)} in`}
+                              aria-label={`Use saved section ${inches.toFixed(3)} inches`}
+                              onClick={() => setRebarStart(coordinate)}
+                            >
+                              ▲
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <input
+                        aria-label="Start section position"
+                        type="range"
+                        min={rebarPlaneBounds[0] * inchesPerModelUnit}
+                        max={rebarPlaneBounds[1] * inchesPerModelUnit}
+                        step={0.25}
+                        value={rebarStart * inchesPerModelUnit}
+                        onChange={(event) =>
+                          setRebarStart(
+                            Number(event.target.value) / inchesPerModelUnit,
+                          )
+                        }
+                      />
+                    </div>
                     <button
                       className="button primary wide"
                       onClick={confirmRebarStartSection}
@@ -3927,7 +4115,7 @@ export default function ModelViewer() {
                     </label>
                     <div className="range-with-markers">
                       <div className="section-markers">
-                        {rebarEndBookmarks.map((coordinate) => {
+                        {rebarSectionBookmarks.map((coordinate) => {
                           const span =
                             rebarPlaneBounds[1] - rebarPlaneBounds[0];
                           const left =
@@ -4034,24 +4222,64 @@ export default function ModelViewer() {
                         className="button primary wide"
                         onClick={() => {
                           if (displayRebarPlane) {
-                            setRebarPathEnd(
-                              projectToPlaneOffset(
+                            const retained = projectToPlaneOffset(
                                 rebarPathEnd,
                                 displayRebarPlane.origin,
                                 displayRebarPlane.normal,
                                 rebarEnd,
-                              ),
+                              );
+                            setRebarPathEnd(retained);
+                            setRebarPathPoints((current) =>
+                              current.length
+                                ? [...current.slice(0, -1), retained]
+                                : current,
                             );
                           }
-                          setRebarPhase("spacing");
+                          setRebarPhase("path-review");
                           setStatus(
-                            "Existing path endpoint retained. Confirm the run details.",
+                            "Existing path endpoint retained. Review the path.",
                           );
                         }}
                       >
                         Keep Existing Endpoint
                       </button>
                     )}
+                  </section>
+                )}
+
+                {rebarPhase === "path-review" && (
+                  <section className="rebar-step">
+                    <span className="eyebrow">SPACING PATH</span>
+                    <div className="path-keypoint-summary">
+                      <strong>{rebarPathPoints.length} keypoints</strong>
+                      <span>
+                        The bar copies will follow each segment in order.
+                      </span>
+                    </div>
+                    <div className="rebar-step-actions">
+                      <button
+                        className="button"
+                        onClick={() => {
+                          setRebarPhase("end");
+                          setStatus(
+                            "Choose the next plane depth, then pick its anchor.",
+                          );
+                        }}
+                        title="Continue the distribution path through another section"
+                      >
+                        Add another keypoint
+                      </button>
+                      <button
+                        className="button primary"
+                        onClick={() => {
+                          setRebarPhase("spacing");
+                          setStatus("Path complete. Confirm the bar run details.");
+                        }}
+                        title="Use the current multipoint path"
+                      >
+                        Complete Path
+                      </button>
+                    </div>
                   </section>
                 )}
 
@@ -4451,6 +4679,7 @@ export default function ModelViewer() {
           }
           rebarPathStart={rebarPathStart}
           rebarPathEnd={rebarPathEnd}
+          rebarPathPoints={rebarPathPoints}
           rebarAxis={rebarAxis}
           rebarDrawingPlane={
             displayRebarPlane && activeRebarPlane
@@ -4470,6 +4699,7 @@ export default function ModelViewer() {
               ? null
               : rebarPhase === "end" ||
                   rebarPhase === "path-end" ||
+                  rebarPhase === "path-review" ||
                   rebarPhase === "spacing"
                 ? rebarEnd
                 : rebarStart

@@ -23,6 +23,8 @@ import type {
 import {
   buildPolyhedron,
   clipPolygonToPlanes,
+  dot,
+  normalize,
   slicePlanes,
 } from "../lib/volumeGeometry";
 
@@ -85,6 +87,7 @@ type Props = {
   rebarPreviewStart: Vec3 | null;
   rebarPathStart: Vec3 | null;
   rebarPathEnd: Vec3 | null;
+  rebarPathPoints: Vec3[];
   rebarAxis: "x" | "y" | "z";
   rebarSection: number | null;
   rebarDrawingPlane: {
@@ -567,6 +570,31 @@ function fitCamera(
   controls.saveState();
 }
 
+function pointAlongPolyline(points: Vec3[], distance: number): Vec3 {
+  if (!points.length) return { x: 0, y: 0, z: 0 };
+  if (points.length === 1 || distance <= 0) return points[0];
+  let remaining = distance;
+  for (let index = 1; index < points.length; index += 1) {
+    const start = points[index - 1];
+    const end = points[index];
+    const length = Math.hypot(
+      end.x - start.x,
+      end.y - start.y,
+      end.z - start.z,
+    );
+    if (remaining <= length || index === points.length - 1) {
+      const amount = length > 1e-12 ? Math.min(remaining / length, 1) : 0;
+      return {
+        x: start.x + (end.x - start.x) * amount,
+        y: start.y + (end.y - start.y) * amount,
+        z: start.z + (end.z - start.z) * amount,
+      };
+    }
+    remaining -= length;
+  }
+  return points[points.length - 1];
+}
+
 export default function PointCloudViewport({
   nodes,
   allNodes,
@@ -616,6 +644,7 @@ export default function PointCloudViewport({
   rebarPreviewStart,
   rebarPathStart,
   rebarPathEnd,
+  rebarPathPoints,
   rebarAxis,
   rebarSection,
   rebarDrawingPlane,
@@ -777,8 +806,8 @@ export default function PointCloudViewport({
 
     try {
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x071018);
-      scene.fog = new THREE.FogExp2(0x071018, 0.0014);
+      scene.background = new THREE.Color(0xf7f7f2);
+      scene.fog = new THREE.FogExp2(0xf7f7f2, 0.0007);
 
       const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 1000000);
       const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -797,9 +826,9 @@ export default function PointCloudViewport({
       controls.mouseButtons.MIDDLE = null as unknown as THREE.MOUSE;
       controls.mouseButtons.RIGHT = null as unknown as THREE.MOUSE;
 
-      const grid = new THREE.GridHelper(240, 24, 0x254255, 0x142835);
+      const grid = new THREE.GridHelper(240, 24, 0x9aa1a6, 0xd7dbdd);
       grid.rotation.x = Math.PI / 2;
-      grid.material.opacity = 0.28;
+      grid.material.opacity = 0.5;
       grid.material.transparent = true;
       scene.add(grid);
       const axes = new THREE.AxesHelper(24);
@@ -1793,8 +1822,8 @@ export default function PointCloudViewport({
     const positions = new Float32Array(nodes.length * 3);
     const colors = new Float32Array(nodes.length * 3);
     const coordinates = new Float32Array(nodes.length * 3);
-    const base = new THREE.Color(0x72e6ff);
-    const selected = new THREE.Color(0xffbf47);
+    const base = new THREE.Color(0x111111);
+    const selected = new THREE.Color(0xf28c28);
     const invalid = new THREE.Color(0xff4d62);
 
     nodes.forEach((node, index) => {
@@ -2325,8 +2354,30 @@ export default function PointCloudViewport({
           ? run.lapOffsetInches / inchesPerModelUnit
           : 0;
       for (const position of run.positions) {
+        const pathTranslation =
+          run.pathPoints && run.pathPoints.length >= 2
+            ? (() => {
+                const pathPoint = pointAlongPolyline(
+                  run.pathPoints!,
+                  position + lapOffset,
+                );
+                const origin = run.pathPoints![0];
+                return {
+                  x: pathPoint.x - origin.x,
+                  y: pathPoint.y - origin.y,
+                  z: pathPoint.z - origin.z,
+                };
+              })()
+            : null;
         for (const line of run.lines) {
           const translated = line.points.map((point) => {
+            if (pathTranslation) {
+              return {
+                x: point.x + pathTranslation.x,
+                y: point.y + pathTranslation.y,
+                z: point.z + pathTranslation.z,
+              };
+            }
             if (
               (run.distributionMode === "edge" ||
                 run.distributionMode === "path") &&
@@ -2501,9 +2552,11 @@ export default function PointCloudViewport({
     if (pendingRebarLine) {
       addPolyline(pendingRebarLine.points, 0xff8a2a, 1, false);
     }
-    if (rebarPathStart && rebarPathEnd) {
+    if (rebarPathPoints.length >= 2 || (rebarPathStart && rebarPathEnd)) {
       const path = addPolyline(
-        [rebarPathStart, rebarPathEnd],
+        rebarPathPoints.length >= 2
+          ? rebarPathPoints
+          : [rebarPathStart!, rebarPathEnd!],
         0xffbf47,
         1,
         false,
@@ -2605,6 +2658,7 @@ export default function PointCloudViewport({
     rebarOuterEdges,
     showRebarScene,
     rebarPathEnd,
+    rebarPathPoints,
     rebarPathStart,
     rebarDrawingPlane,
     rebarPlanePreviews,
@@ -2641,8 +2695,8 @@ export default function PointCloudViewport({
     const state = sceneRef.current;
     const colorAttribute = state?.geometry.getAttribute("nodeColor");
     if (!state || !colorAttribute || colorAttribute.count !== nodes.length) return;
-    const base = new THREE.Color(0x72e6ff);
-    const selected = new THREE.Color(0xffbf47);
+    const base = new THREE.Color(0x111111);
+    const selected = new THREE.Color(0xf28c28);
     const invalid = new THREE.Color(0xff4d62);
     nodes.forEach((node, index) => {
       const color = invalidNodeIds.includes(node.id)

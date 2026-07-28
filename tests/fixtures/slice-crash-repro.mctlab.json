@@ -1,0 +1,116 @@
+{
+  "format": "mct-section-lab-project",
+  "version": 1,
+  "workspace": {
+    "version": 1,
+    "fileName": "slice-crash-repro.mct",
+    "nodes": [
+      { "id": 1, "global": { "x": 0, "y": 0, "z": 0 } },
+      { "id": 2, "global": { "x": 10, "y": 0, "z": 0 } },
+      { "id": 3, "global": { "x": 10, "y": 10, "z": 0 } },
+      { "id": 4, "global": { "x": 0, "y": 10, "z": 0 } },
+      { "id": 5, "global": { "x": 0, "y": 0, "z": 10 } },
+      { "id": 6, "global": { "x": 10, "y": 0, "z": 10 } },
+      { "id": 7, "global": { "x": 10, "y": 10, "z": 10 } },
+      { "id": 8, "global": { "x": 0, "y": 10, "z": 10 } }
+    ],
+    "faces": [],
+    "activeTab": "slicing",
+    "definingFaces": false,
+    "smartSelecting": false,
+    "draftNodeIds": [],
+    "selectedFaceIds": [],
+    "volumeConfirmed": true,
+    "floorFaceId": null,
+    "xDirectionNodeIds": [],
+    "basis": {
+      "origin": { "x": 0, "y": 0, "z": 0 },
+      "xAxis": { "x": 1, "y": 0, "z": 0 },
+      "yAxis": { "x": 0, "y": 1, "z": 0 },
+      "zAxis": { "x": 0, "y": 0, "z": 1 }
+    },
+    "slice": {
+      "x": [0, 10],
+      "y": [0, 10],
+      "z": [0, 10]
+    },
+    "selectedNodeId": null,
+    "elements": [
+      {
+        "id": 1,
+        "type": "SOLID",
+        "nodeIds": [1, 2, 3, 4, 5, 6, 7, 8]
+      }
+    ],
+    "showElementSkin": true,
+    "elementSkinVolume": true,
+    "inchesPerModelUnit": 1,
+    "rebarRuns": [
+      {
+        "id": "test-run",
+        "name": "Test Run",
+        "color": "#c62828",
+        "barNumber": "5",
+        "planeId": "top",
+        "startOffset": 0,
+        "endOffset": -10,
+        "axis": "z",
+        "start": 0,
+        "end": -10,
+        "distributionMode": "path",
+        "distributionVector": { "x": 0, "y": 0, "z": -1 },
+        "pathStart": { "x": 2, "y": 2, "z": 10 },
+        "pathEnd": { "x": 2, "y": 2, "z": 0 },
+        "pathPoints": [
+          { "x": 2, "y": 2, "z": 10 },
+          { "x": 2, "y": 2, "z": 0 }
+        ],
+        "objectLines": [
+          {
+            "id": "test-line",
+            "points": [
+              { "x": 2, "y": 2, "z": 10 },
+              { "x": 8, "y": 2, "z": 10 }
+            ],
+            "closed": false
+          }
+        ],
+        "objectPathStart": { "x": 2, "y": 2, "z": 10 },
+        "objectPathEnd": { "x": 2, "y": 2, "z": 0 },
+        "objectPathPoints": [
+          { "x": 2, "y": 2, "z": 10 },
+          { "x": 2, "y": 2, "z": 0 }
+        ],
+        "spacingInches": 5,
+        "positions": [0, 5, 10],
+        "lines": [
+          {
+            "id": "test-line",
+            "points": [
+              { "x": 2, "y": 2, "z": 10 },
+              { "x": 8, "y": 2, "z": 10 }
+            ],
+            "closed": false
+          }
+        ]
+      }
+    ],
+    "rebarPlanes": [
+      {
+        "id": "top",
+        "name": "Top Horizontal",
+        "color": "#5b8def",
+        "objectOrigin": { "x": 0, "y": 0, "z": 10 },
+        "objectNormal": { "x": 0, "y": 0, "z": 1 },
+        "nodeIds": []
+      }
+    ],
+    "rebarGroups": [],
+    "favoriteRebarPlaneIds": ["top"],
+    "slicePins": [],
+    "showRebarInSlicing": true,
+    "showConcreteSkin": true,
+    "lineAndBar": false,
+    "showRebarLabels": false
+  }
+}

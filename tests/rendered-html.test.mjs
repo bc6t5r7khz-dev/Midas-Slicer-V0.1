@@ -28,8 +28,8 @@ test("server-renders the MCT Section Lab application", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /<title>MCT Section Lab<\/title>/i);
-  assert.match(html, /Volume Definition/);
-  assert.match(html, /Coordinates/);
+  assert.match(html, />Model</);
+  assert.match(html, /Axes \+ Scale/);
   assert.match(html, /Slicing/);
   assert.match(html, /Rebar/);
   assert.match(html, /Import Project/);
@@ -59,9 +59,12 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /PINNED SLICES/);
   assert.match(viewer, /Save Viewpoint/);
   assert.match(viewer, /favoriteRebarPlaneIds/);
+  assert.match(viewer, /Add another keypoint/);
+  assert.match(viewer, /rebarPathPoints/);
   assert.doesNotMatch(viewer, /<InchRangeControl/);
   assert.match(types, /export type RebarPlane/);
   assert.match(types, /export type SlicePin/);
+  assert.match(types, /pathPoints\?: Vec3\[\]/);
   assert.match(types, /barNumber\?: string/);
   assert.match(storage, /rebarPlanes\?: RebarPlane\[\]/);
   assert.match(storage, /slicePins\?: SlicePin\[\]/);

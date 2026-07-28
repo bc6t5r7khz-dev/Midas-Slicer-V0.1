@@ -1846,3 +1846,344 @@ button {
     display: none;
   }
 }
+
+/* V38 drafting workspace */
+:root {
+  --ink: #111111;
+  --text: #111111;
+  --muted: #62676b;
+  --panel: #ffffff;
+  --panel-2: #f4f4f0;
+  --line: #c7cbcd;
+  --cyan: #111111;
+  --cyan-strong: #111111;
+  --amber: #d18400;
+  --danger: #b3261e;
+  --background: #f7f7f2;
+}
+
+html,
+body {
+  background: var(--background);
+  color: var(--ink);
+  font-family: "Cascadia Mono", "IBM Plex Mono", Consolas, "Courier New",
+    monospace;
+  font-size: 12px;
+}
+
+.app-shell {
+  grid-template-columns: 340px minmax(0, 1fr);
+  background: var(--background);
+}
+
+.topbar,
+.control-rail,
+.workflow-tabs {
+  background: #fff;
+}
+
+.topbar,
+.brand,
+.control-rail,
+.workflow-tabs,
+.workflow-tabs button {
+  border-color: #111;
+}
+
+.brand-mark i,
+.status-dot {
+  background: #111;
+  box-shadow: none;
+}
+
+.brand span,
+.eyebrow,
+.privacy-note,
+.file-summary strong,
+.workflow-tabs button,
+.workflow-tabs button span {
+  color: #4f5457;
+}
+
+.workflow-tabs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.workflow-tabs button {
+  min-height: 52px;
+  padding: 9px 5px;
+  font-size: 9px;
+}
+
+.workflow-tabs button:hover {
+  background: #f0f0eb;
+  color: #111;
+}
+
+.workflow-tabs button.active {
+  border-bottom-color: #111;
+  background: #111;
+  color: #fff;
+}
+
+.workflow-tabs button.active span {
+  color: #cfd2d3;
+}
+
+.button {
+  min-height: 34px;
+  border-color: #aeb3b5;
+  border-radius: 1px;
+  background: #fff;
+  color: #111;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.button:hover {
+  border-color: #111;
+  background: #efefe9;
+}
+
+.button.primary {
+  border-color: #111;
+  background: #111;
+  color: #fff;
+}
+
+.button.primary:hover {
+  background: #333;
+}
+
+.tab-content.rebar-content {
+  gap: 12px;
+  padding: 12px;
+}
+
+.rebar-view-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid #aeb3b5;
+  background: #aeb3b5;
+}
+
+.rebar-view-options .skin-toggle {
+  min-height: 38px;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px;
+  background: #fff;
+  color: #282b2d;
+  font-size: 9px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.rebar-view-options input {
+  width: 14px;
+  height: 14px;
+  accent-color: #111;
+}
+
+.cover-offset-controls,
+.rebar-plane-manager,
+.rebar-step,
+.rebar-color-picker {
+  border: 1px solid #aeb3b5;
+  border-radius: 0;
+  background: #fff;
+  padding: 10px;
+}
+
+.cover-offset-controls input,
+.rebar-plane-rename input,
+.rebar-step input,
+.bar-number-buttons button {
+  border-color: #aeb3b5;
+  border-radius: 1px;
+  background: #fff;
+  color: #111;
+}
+
+.rebar-plane-list {
+  gap: 0;
+  max-height: 150px;
+  border: 1px solid #c7cbcd;
+}
+
+.rebar-plane-row > button,
+.rebar-plane-rename,
+.active-plane-chip {
+  min-height: 32px;
+  border: 0;
+  border-bottom: 1px solid #d9dcdd;
+  border-radius: 0;
+  background: #fff;
+  color: #111;
+}
+
+.rebar-plane-row > button:hover {
+  background: #f2f2ed;
+}
+
+.rebar-plane-row > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.rebar-plane-row.selected > button,
+.rebar-plane-row.selected .rebar-plane-rename {
+  border-color: #111;
+  background: #e7e7e1;
+  box-shadow: inset 3px 0 0 #111;
+}
+
+.rebar-primary-actions,
+.rebar-plane-actions,
+.rebar-step-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.selection-callout {
+  margin: 0 0 10px;
+  border-left: 3px solid #111;
+  background: #f1f1ec;
+}
+
+.selection-callout strong {
+  color: #111;
+  font-family: inherit;
+}
+
+.selection-callout span {
+  color: #5b6063;
+}
+
+.bar-run-list,
+.slicing-plane-list,
+.favorite-plane-list,
+.slice-pin-list {
+  border-color: #aeb3b5;
+  background: #fff;
+}
+
+.bar-run-item,
+.bar-run-group {
+  border-color: #d5d8d9;
+}
+
+.bar-run-item:hover,
+.bar-run-group-header {
+  background: #f2f2ed;
+}
+
+.bar-run-item.selected {
+  background: #fff2d5;
+  box-shadow: inset 3px 0 0 #d18400;
+}
+
+.path-keypoint-summary {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px dashed #777;
+  background: #fafaf7;
+}
+
+.path-keypoint-summary span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.slicing-subtabs,
+.slicing-plane-row,
+.slice-pin-row,
+.slice-pin-dock {
+  border-color: #aeb3b5;
+}
+
+.slicing-subtabs button.active {
+  border-bottom-color: #111;
+  color: #111;
+}
+
+.slicing-plane-list,
+.favorite-plane-list,
+.slice-pin-list {
+  background: #fff;
+}
+
+.slicing-plane-row.selected,
+.favorite-plane-list > button.selected {
+  background: #e7e7e1;
+  color: #111;
+}
+
+.slice-pin-dock button {
+  border-color: #999;
+  background: #fff;
+  color: #111;
+}
+
+.slice-pin-dock button.active {
+  border-color: #111;
+  background: #111;
+  color: #fff;
+}
+
+.coordinate-steps > div.active {
+  background: #efefe9;
+  box-shadow: inset 3px 0 0 #111;
+}
+
+.success-callout {
+  border-color: #111;
+  background: #f0f0eb;
+}
+
+.fatal-fallback,
+.error-toast {
+  background: #fff;
+  color: #111;
+}
+
+.fatal-fallback > div {
+  border-color: #111;
+  background: #fff;
+}
+
+.fatal-fallback p,
+.error-toast button {
+  color: #111;
+}
+
+.view-hud {
+  color: #111;
+}
+
+.view-hud > span:last-child,
+.axis-badge {
+  color: #4f5457;
+}
+
+.axis-badge {
+  border-color: #111;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.render-fallback > div {
+  border-color: #111;
+  background: #fff;
+}
+
+.render-fallback p {
+  color: #333;
+}
+
+.rail-footer {
+  border-color: #c7cbcd;
+  background: #f4f4f0;
+}

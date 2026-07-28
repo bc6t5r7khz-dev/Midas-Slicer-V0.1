@@ -59,7 +59,13 @@ function insetConvexPolygon(points: Point2[], distance: number) {
       b: normalA.b + normalB.b,
     };
     const denominator = bisector.a * normalA.a + bisector.b * normalA.b;
-    const scale = Math.abs(denominator) > 1e-8 ? distance / denominator : distance;
+    const rawScale =
+      Math.abs(denominator) > 1e-8 ? distance / denominator : distance;
+    const maximumMiter = Math.max(Math.abs(distance) * 8, 1e-9);
+    const scale = Math.max(
+      -maximumMiter,
+      Math.min(maximumMiter, rawScale),
+    );
     return {
       a: point.a + bisector.a * scale,
       b: point.b + bisector.b * scale,
@@ -345,6 +351,28 @@ export function createPlaneCoverOutlines(
     1,
   );
   const tolerance = scale * 1e-7;
+  const signedNodeDistances = [...nodeMap.values()].map((point) =>
+    dot3(subtract3(point, origin), normal),
+  );
+  const minimumDistance = Math.min(...signedNodeDistances);
+  const maximumDistance = Math.max(...signedNodeDistances);
+  const coplanarCount = signedNodeDistances.filter(
+    (distance) => Math.abs(distance) <= tolerance,
+  ).length;
+  let samplingShift = 0;
+  if (coplanarCount >= 3) {
+    if (maximumDistance <= tolerance) {
+      samplingShift = -tolerance * 24;
+    } else if (minimumDistance >= -tolerance) {
+      samplingShift = tolerance * 24;
+    } else {
+      samplingShift =
+        Math.abs(minimumDistance) > Math.abs(maximumDistance)
+          ? -tolerance * 24
+          : tolerance * 24;
+    }
+  }
+  const samplingOrigin = add3(origin, scale3(normal, samplingShift));
   const precision = 1 / Math.max(tolerance, 1e-8);
   const edgeCounts = new Map<
     string,
@@ -359,8 +387,8 @@ export function createPlaneCoverOutlines(
     for (const [firstIndex, secondIndex] of solidEdges(vertices.length)) {
       const first = vertices[firstIndex]!;
       const second = vertices[secondIndex]!;
-      const firstDistance = dot3(subtract3(first, origin), normal);
-      const secondDistance = dot3(subtract3(second, origin), normal);
+      const firstDistance = dot3(subtract3(first, samplingOrigin), normal);
+      const secondDistance = dot3(subtract3(second, samplingOrigin), normal);
       if (Math.abs(firstDistance) <= tolerance) intersections.push(first);
       if (firstDistance * secondDistance < 0) {
         const amount = firstDistance / (firstDistance - secondDistance);
@@ -443,7 +471,7 @@ export function createPlaneCoverOutlines(
   return loops
     .map((loop) =>
       loop.map((point) => {
-        const delta = subtract3(point, origin);
+        const delta = subtract3(point, samplingOrigin);
         return { a: dot3(delta, u), b: dot3(delta, v) };
       }),
     )
@@ -462,15 +490,44 @@ export function createPlaneCoverOutlines(
           }, 0),
         ),
     )
-    .map((loop, loopIndex) => {
+    .map((loop, loopIndex, allLoops) => {
       const signedArea = loop.reduce((sum, point, index) => {
         const next = loop[(index + 1) % loop.length];
         return sum + point.a * next.b - next.a * point.b;
       }, 0);
       const oriented = signedArea < 0 ? [...loop].reverse() : loop;
+      const center = loop.reduce(
+        (sum, point) => ({
+          a: sum.a + point.a / loop.length,
+          b: sum.b + point.b / loop.length,
+        }),
+        { a: 0, b: 0 },
+      );
+      const nestingDepth = allLoops.filter((candidate, candidateIndex) => {
+        if (candidateIndex === loopIndex) return false;
+        let inside = false;
+        for (
+          let index = 0, previous = candidate.length - 1;
+          index < candidate.length;
+          previous = index, index += 1
+        ) {
+          const first = candidate[index];
+          const second = candidate[previous];
+          if (
+            (first.b > center.b) !== (second.b > center.b) &&
+            center.a <
+              ((second.a - first.a) * (center.b - first.b)) /
+                (second.b - first.b || 1e-12) +
+                first.a
+          ) {
+            inside = !inside;
+          }
+        }
+        return inside;
+      }).length;
       const inset = insetConvexPolygon(
         oriented,
-        loopIndex === 0 ? coverModelUnits : -coverModelUnits,
+        nestingDepth % 2 === 0 ? coverModelUnits : -coverModelUnits,
       );
       return inset.map((point) =>
         add3(origin, add3(scale3(u, point.a), scale3(v, point.b))),

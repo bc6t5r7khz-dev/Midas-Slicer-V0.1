@@ -116,9 +116,12 @@ export type RebarRun = {
   distributionVector?: Vec3;
   pathStart?: Vec3;
   pathEnd?: Vec3;
+  /** Ordered anchors for a bar run distributed along a bent/polyline path. */
+  pathPoints?: Vec3[];
   objectLines?: RebarLine[];
   objectPathStart?: Vec3;
   objectPathEnd?: Vec3;
+  objectPathPoints?: Vec3[];
   spacingInches: number;
   lappedFromRunId?: string;
   lapOffsetInches?: number;
