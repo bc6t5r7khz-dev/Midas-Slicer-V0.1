@@ -32,6 +32,7 @@ export type SavedWorkspace = {
   inchesPerModelUnit?: number | null;
   rebarRuns?: RebarRun[];
   showConcreteSkin?: boolean;
+  lineAndBar?: boolean;
   showRebarLabels?: boolean;
 };
 

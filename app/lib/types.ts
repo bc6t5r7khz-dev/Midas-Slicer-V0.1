@@ -71,6 +71,7 @@ export type RebarLine = {
 export type RebarRun = {
   id: string;
   name: string;
+  color?: string;
   axis: Axis;
   start: number;
   end: number;
@@ -82,6 +83,8 @@ export type RebarRun = {
   objectPathStart?: Vec3;
   objectPathEnd?: Vec3;
   spacingInches: number;
+  lappedFromRunId?: string;
+  lapOffsetInches?: number;
   positions: number[];
   lines: RebarLine[];
 };

@@ -438,6 +438,10 @@ button {
 }
 
 .bar-run-list > button {
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  align-items: center;
+  gap: 9px;
   width: 100%;
   padding: 11px 12px;
   border: 0;
@@ -446,6 +450,13 @@ button {
   color: var(--text);
   text-align: left;
   cursor: pointer;
+}
+
+.bar-run-color {
+  width: 9px;
+  height: 28px;
+  border: 1px solid #ffffff42;
+  border-radius: 2px;
 }
 
 .bar-run-list > button:last-child {
@@ -479,6 +490,53 @@ button {
 
 .bar-run-delete {
   margin: 12px !important;
+}
+
+.bar-run-edit {
+  width: calc(100% - 24px);
+  margin: 12px 12px 0;
+}
+
+.rebar-primary-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.rebar-primary-actions .button {
+  min-height: 38px;
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+.rebar-color-picker {
+  margin: 12px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  background: #08141b;
+}
+
+.rebar-color-picker > div {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.rebar-color-picker button {
+  width: 100%;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 0;
+  border: 1px solid #ffffff40;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.rebar-color-picker button:hover,
+.rebar-color-picker button:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 1px;
 }
 
 .bar-run-delete:disabled {
@@ -1209,6 +1267,11 @@ button {
   border-color: var(--cyan);
   background: #12333e;
   color: var(--cyan);
+}
+
+.axis-choice button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .skin-toggle {

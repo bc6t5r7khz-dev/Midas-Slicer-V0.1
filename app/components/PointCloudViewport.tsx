@@ -74,6 +74,7 @@ type Props = {
   rebarSection: number | null;
   inchesPerModelUnit: number | null;
   showConcreteSkin: boolean;
+  lineAndBar: boolean;
   rebarDrawing: boolean;
   showAxes: boolean;
   onPickRebarPoint: (point: Vec3) => void;
@@ -582,6 +583,7 @@ export default function PointCloudViewport({
   rebarSection,
   inchesPerModelUnit,
   showConcreteSkin,
+  lineAndBar,
   rebarDrawing,
   showAxes,
   onPickRebarPoint,
@@ -599,9 +601,9 @@ export default function PointCloudViewport({
   const elementMeshRef = useRef<THREE.Mesh | null>(null);
   const triangleElementIdsRef = useRef<number[]>([]);
   const rebarGuideObjectsRef = useRef<THREE.Line[]>([]);
-  const rebarEdgeObjectsRef = useRef<THREE.LineSegments2[]>([]);
+  const rebarEdgeObjectsRef = useRef<LineSegments2[]>([]);
   const rebarEdgeDataRef = useRef<
-    Array<{ object: THREE.LineSegments2; start: Vec3; end: Vec3; index: number }>
+    Array<{ object: LineSegments2; start: Vec3; end: Vec3; index: number }>
   >([]);
   const rebarGuidePointsRef = useRef<Vec3[]>([]);
   const rebarSnapLinesRef = useRef<RebarLine[]>(rebarSnapLines);
@@ -785,7 +787,7 @@ export default function PointCloudViewport({
         snapNodeId: number | null;
       } | null = null;
       let hoveredEdge: THREE.Line | null = null;
-      let hoveredRebarEdge: THREE.LineSegments2 | null = null;
+      let hoveredRebarEdge: LineSegments2 | null = null;
       let hoveredRebarVertex: Vec3 | null = null;
       let orbitDrag: {
         pointerId: number;
@@ -840,7 +842,7 @@ export default function PointCloudViewport({
         }
       };
 
-      const setHoveredRebarEdge = (edge: THREE.LineSegments2 | null) => {
+      const setHoveredRebarEdge = (edge: LineSegments2 | null) => {
         if (hoveredRebarEdge === edge) return;
         if (hoveredRebarEdge) {
           const selected =
@@ -896,7 +898,7 @@ export default function PointCloudViewport({
 
       const closestRebarEdge = (event: PointerEvent) => {
         let closest:
-          | { object: THREE.LineSegments2; index: number; distance: number }
+          | { object: LineSegments2; index: number; distance: number }
           | null = null;
         for (const edge of rebarEdgeDataRef.current) {
           const distance = projectedDistanceToSegment(
@@ -1455,10 +1457,11 @@ export default function PointCloudViewport({
           const hit = elementMeshRef.current
             ? raycaster.intersectObject(elementMeshRef.current)[0]
             : undefined;
+          const faceIndex = hit?.faceIndex;
           const elementId =
-            hit?.faceIndex === undefined
-              ? undefined
-              : triangleElementIdsRef.current[hit.faceIndex];
+            typeof faceIndex === "number"
+              ? triangleElementIdsRef.current[faceIndex]
+              : undefined;
           if (elementId !== undefined) onPickElementRef.current(elementId);
           return;
         }
@@ -1711,8 +1714,9 @@ export default function PointCloudViewport({
     elementMeshRef.current = null;
     triangleElementIdsRef.current = [];
     const solidView = slicingMode || rebarMode;
+    const lineOnly = rebarMode && lineAndBar;
     const renderElementSkin = rebarMode
-      ? showConcreteSkin
+      ? showConcreteSkin || lineOnly
       : showElementSkin || slicingMode;
     state.elementGroup.visible = renderElementSkin;
     if (!renderElementSkin || !elementSurfaces.length) return;
@@ -1734,17 +1738,21 @@ export default function PointCloudViewport({
         new THREE.Float32BufferAttribute(buffers.positions, 3),
       );
       geometry.computeVertexNormals();
-      const mesh = new THREE.Mesh(
-        geometry,
-        new THREE.MeshBasicMaterial({
-          color: 0xc8d0d3,
-          polygonOffset: true,
-          polygonOffsetFactor: 1,
-          polygonOffsetUnits: 1,
-          side: THREE.DoubleSide,
-        }),
-      );
-      state.elementGroup.add(mesh);
+      if (!lineOnly) {
+        const mesh = new THREE.Mesh(
+          geometry,
+          new THREE.MeshBasicMaterial({
+            color: 0xc8d0d3,
+            polygonOffset: true,
+            polygonOffsetFactor: 1,
+            polygonOffsetUnits: 1,
+            side: THREE.DoubleSide,
+          }),
+        );
+        state.elementGroup.add(mesh);
+      } else {
+        geometry.dispose();
+      }
 
       const exteriorGeometry = new THREE.BufferGeometry();
       exteriorGeometry.setAttribute(
@@ -1766,8 +1774,8 @@ export default function PointCloudViewport({
           new THREE.LineSegments(
             featureGeometry,
             new THREE.LineBasicMaterial({
-              color: 0x05090c,
-              opacity: 0.82,
+              color: lineOnly ? 0xaeb9be : 0x05090c,
+              opacity: lineOnly ? 0.96 : 0.82,
               transparent: true,
             }),
           ),
@@ -1791,7 +1799,7 @@ export default function PointCloudViewport({
         );
         capOutline.dispose();
         const cutMaterial = new LineMaterial({
-          color: 0x05090c,
+          color: lineOnly ? 0xd8e0e3 : 0x05090c,
           linewidth: 3,
           resolution: new THREE.Vector2(
             state.renderer.domElement.clientWidth,
@@ -1925,27 +1933,46 @@ export default function PointCloudViewport({
       new THREE.Float32BufferAttribute(triangleColors, 3),
     );
     meshGeometry.computeVertexNormals();
-    const elementMesh = new THREE.Mesh(
-      meshGeometry,
-      new THREE.MeshBasicMaterial({
-        clippingPlanes,
-        vertexColors: true,
-        opacity: solidView
-          ? 1
-          : elementEditMode
-            ? 0.42
-            : volumeConfirmed
-              ? 0.18
-              : 0.1,
-        transparent: !solidView,
-        depthWrite: solidView,
-        side: THREE.DoubleSide,
-      }),
-    );
-    elementMeshRef.current = elementMesh;
-    state.elementGroup.add(elementMesh);
+    if (!lineOnly) {
+      const elementMesh = new THREE.Mesh(
+        meshGeometry,
+        new THREE.MeshBasicMaterial({
+          clippingPlanes,
+          vertexColors: true,
+          opacity: solidView
+            ? 1
+            : elementEditMode
+              ? 0.42
+              : volumeConfirmed
+                ? 0.18
+                : 0.1,
+          transparent: !solidView,
+          depthWrite: solidView,
+          side: THREE.DoubleSide,
+        }),
+      );
+      elementMeshRef.current = elementMesh;
+      state.elementGroup.add(elementMesh);
+    }
 
-    if (!solidView) {
+    if (lineOnly) {
+      const outlineGeometry = new THREE.EdgesGeometry(meshGeometry, 25);
+      if (outlineGeometry.getAttribute("position").count) {
+        state.elementGroup.add(
+          new THREE.LineSegments(
+            outlineGeometry,
+            new THREE.LineBasicMaterial({
+              clippingPlanes,
+              color: 0xaeb9be,
+              depthTest: false,
+            }),
+          ),
+        );
+      } else {
+        outlineGeometry.dispose();
+      }
+      meshGeometry.dispose();
+    } else if (!solidView) {
       const edgeGeometry = new THREE.BufferGeometry();
       edgeGeometry.setAttribute(
         "position",
@@ -1990,6 +2017,7 @@ export default function PointCloudViewport({
     showElementSkin,
     rebarMode,
     showConcreteSkin,
+    lineAndBar,
     slice,
     sliceBounds,
     slicingMode,
@@ -2087,16 +2115,33 @@ export default function PointCloudViewport({
       state.rebarGroup.add(jointMeshes);
     };
 
-    const rodSegments: Array<[Vec3, Vec3]> = [];
-    const rodJoints: Vec3[] = [];
+    type RodBuffers = {
+      segments: Array<[Vec3, Vec3]>;
+      joints: Vec3[];
+    };
+    const rodsByColor = new Map<string, RodBuffers>();
     const selectedRodSegments: Array<[Vec3, Vec3]> = [];
     const selectedRodJoints: Vec3[] = [];
     for (const run of rebarRuns) {
       const runSelected = selectedRebarRunIds.has(run.id);
+      const color = run.color ?? "#8f1717";
+      const colorBuffers = rodsByColor.get(color) ?? {
+        segments: [],
+        joints: [],
+      };
+      if (!runSelected && !rodsByColor.has(color)) {
+        rodsByColor.set(color, colorBuffers);
+      }
       const targetSegments = runSelected
         ? selectedRodSegments
-        : rodSegments;
-      const targetJoints = runSelected ? selectedRodJoints : rodJoints;
+        : colorBuffers.segments;
+      const targetJoints = runSelected
+        ? selectedRodJoints
+        : colorBuffers.joints;
+      const lapOffset =
+        inchesPerModelUnit && run.lapOffsetInches
+          ? run.lapOffsetInches / inchesPerModelUnit
+          : 0;
       for (const position of run.positions) {
         for (const line of run.lines) {
           const translated = line.points.map((point) => {
@@ -2106,12 +2151,21 @@ export default function PointCloudViewport({
               run.distributionVector
             ) {
               return {
-                x: point.x + run.distributionVector.x * position,
-                y: point.y + run.distributionVector.y * position,
-                z: point.z + run.distributionVector.z * position,
+                x:
+                  point.x +
+                  run.distributionVector.x * (position + lapOffset),
+                y:
+                  point.y +
+                  run.distributionVector.y * (position + lapOffset),
+                z:
+                  point.z +
+                  run.distributionVector.z * (position + lapOffset),
               };
             }
-            return { ...point, [run.axis]: position };
+            return {
+              ...point,
+              [run.axis]: position + lapOffset,
+            };
           });
           targetJoints.push(...translated);
           for (let index = 0; index < translated.length - 1; index += 1) {
@@ -2129,18 +2183,30 @@ export default function PointCloudViewport({
       if (showRebarLabels && firstPoint) {
         const label = createTextSprite(run.name);
         if (label) {
-          const position = toThree(
-            run.distributionMode === "path"
-              ? firstPoint
-              : { ...firstPoint, [run.axis]: run.start },
-            displayOffset,
-          );
+          const labelPoint =
+            run.distributionMode === "path" && run.distributionVector
+              ? {
+                  x: firstPoint.x + run.distributionVector.x * lapOffset,
+                  y: firstPoint.y + run.distributionVector.y * lapOffset,
+                  z: firstPoint.z + run.distributionVector.z * lapOffset,
+                }
+              : {
+                  ...firstPoint,
+                  [run.axis]: run.start + lapOffset,
+                };
+          const position = toThree(labelPoint, displayOffset);
           label.position.copy(position);
           state.rebarGroup.add(label);
         }
       }
     }
-    addRodMeshes(rodSegments, rodJoints, 0x8f1717);
+    rodsByColor.forEach((buffers, color) => {
+      addRodMeshes(
+        buffers.segments,
+        buffers.joints,
+        new THREE.Color(color).getHex(),
+      );
+    });
     addRodMeshes(
       selectedRodSegments,
       selectedRodJoints,
