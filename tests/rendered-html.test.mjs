@@ -56,8 +56,12 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /Show all planes/);
   assert.match(viewer, /Display all favorite planes/);
   assert.match(viewer, /pin-added-notice/);
+  assert.match(viewer, /Clear active pin/);
+  assert.match(viewer, /title=\{`\$\{run\.positions\.length\} bars/);
+  assert.match(viewer, /button wide danger-outline bar-run-delete/);
   assert.doesNotMatch(viewer, /Create or review reinforcement runs/);
   assert.doesNotMatch(viewer, /LOCAL PROCESSING/);
+  assert.doesNotMatch(viewer, /Three\.js · browser only/);
   assert.match(viewer, /auto-top-horizontal/);
   assert.match(viewer, /Export Rebar Quantity/);
   assert.match(viewer, /event\.key === "Escape"/);

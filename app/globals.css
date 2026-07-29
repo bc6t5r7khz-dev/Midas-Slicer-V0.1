@@ -2483,3 +2483,128 @@ input[type="range"]::-moz-range-thumb {
   border-radius: 50%;
   background: #fff;
 }
+
+/* Compact rebar rail */
+.topbar {
+  grid-template-columns: 340px minmax(0, 1fr) auto;
+}
+
+.rebar-rail {
+  overflow: hidden;
+}
+
+.rebar-rail .workflow-tabs,
+.rebar-rail .rail-footer {
+  flex: 0 0 auto;
+}
+
+.rebar-rail .rebar-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 8px;
+  overflow: hidden;
+  padding: 8px;
+}
+
+.rebar-rail .rebar-content:has(.rebar-step) {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.rebar-content > .rebar-plane-manager {
+  min-height: 90px;
+  max-height: 160px;
+  flex: 0 1 160px;
+  grid-template-rows: 28px minmax(48px, 1fr);
+  padding: 7px;
+}
+
+.rebar-content .rebar-plane-list {
+  min-height: 0;
+  max-height: none;
+}
+
+.rebar-content > .face-list-section {
+  width: 100%;
+  min-height: 130px;
+  flex: 1 1 210px;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.rebar-content .bar-run-list {
+  min-height: 48px;
+  max-height: none;
+  flex: 1 1 auto;
+}
+
+.rebar-content .section-heading {
+  min-height: 30px;
+  flex: 0 0 30px;
+  padding: 0 9px;
+}
+
+.rebar-content .section-heading .eyebrow {
+  color: #111;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+.rebar-content .section-heading > strong {
+  font-size: 11px;
+}
+
+.rebar-content .bar-run-item {
+  min-height: 31px;
+  padding: 6px 9px;
+}
+
+.rebar-content .bar-run-color {
+  height: 20px;
+}
+
+.rebar-content .bar-run-item strong {
+  font-size: 10px;
+}
+
+.rebar-content .add-group-button,
+.rebar-content .bar-run-delete {
+  width: calc(100% - 24px);
+  min-height: 32px;
+  margin: 8px 12px 0 !important;
+}
+
+.rebar-content .bar-run-delete {
+  border-color: #a82a23;
+  background: #fff0ee;
+  color: #8e211b;
+}
+
+.view-menu-clear {
+  border-top: 1px solid #111 !important;
+  color: #8e211b !important;
+  font-weight: 700;
+}
+
+.view-menu-clear:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.rail-footer {
+  min-height: 24px;
+  justify-content: flex-start;
+  padding: 5px 10px;
+  font-size: 8px;
+}
+
+@media (max-width: 840px) {
+  .topbar {
+    grid-template-columns: 1fr auto;
+  }
+
+  .rebar-rail {
+    overflow: visible;
+  }
+}

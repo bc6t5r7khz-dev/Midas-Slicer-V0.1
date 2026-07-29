@@ -3057,6 +3057,7 @@ export default function ModelViewer() {
     <button
       type="button"
       key={run.id}
+      title={`${run.positions.length} bars · #${run.barNumber ?? "5"} · ${run.spacingInches}" nominal${run.lappedFromRunId ? " · lapped" : ""}`}
       draggable={rebarPhase === "idle"}
       className={`bar-run-item ${
         selectedRebarRunIds.has(run.id) ? "selected" : ""
@@ -3090,11 +3091,6 @@ export default function ModelViewer() {
       />
       <span>
         <strong>{run.name}</strong>
-        <small>
-          {run.positions.length} bars · #{run.barNumber ?? "5"} ·{" "}
-          {run.spacingInches}&quot; nominal
-          {run.lappedFromRunId ? " · lapped" : ""}
-        </small>
       </span>
     </button>
   );
@@ -3321,6 +3317,16 @@ export default function ModelViewer() {
                         {pin.name}
                       </button>
                     ))}
+                    <button
+                      className="view-menu-clear"
+                      disabled={!activeSlicePinId}
+                      onClick={() => {
+                        setActiveSlicePinId(null);
+                        setOpenHeaderMenu(null);
+                      }}
+                    >
+                      Clear active pin
+                    </button>
                   </div>
                 )}
               </div>
@@ -3354,7 +3360,7 @@ export default function ModelViewer() {
       </header>
 
       <aside
-        className="control-rail"
+        className={`control-rail ${activeTab === "rebar" ? "rebar-rail" : ""}`}
         onClickCapture={(event) => {
           if (
             activeTab === "rebar" &&
@@ -4888,7 +4894,7 @@ export default function ModelViewer() {
                         </div>
                       )}
                     <button
-                      className="danger-button bar-run-delete"
+                      className="button wide danger-outline bar-run-delete"
                       data-rebar-selection-control
                       disabled={
                         rebarPhase !== "idle" ||
@@ -4950,8 +4956,8 @@ export default function ModelViewer() {
         </section>
         )}
 
-        {(activeTab === "rebar" ||
-          (activeTab === "slicing" && slicingSubtab === "pins")) &&
+        {activeTab === "slicing" &&
+          slicingSubtab === "pins" &&
           slicePins.length > 0 && (
             <section className="slice-pin-dock" aria-label="Pinned slices">
               <span>PINS</span>
@@ -4984,7 +4990,6 @@ export default function ModelViewer() {
 
         <footer className="rail-footer">
           <span>{status}</span>
-          <span>Three.js · browser only</span>
         </footer>
       </aside>
 
