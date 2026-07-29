@@ -159,6 +159,43 @@ const subtract = (a: Vec3, b: Vec3): Vec3 => ({
   z: a.z - b.z,
 });
 
+const nearlyEqual = (a: number, b: number, epsilon = 1e-7) =>
+  Math.abs(a - b) <= epsilon;
+
+const samePoint = (a: Vec3 | null | undefined, b: Vec3 | null | undefined) =>
+  (!a && !b) ||
+  Boolean(
+    a &&
+      b &&
+      nearlyEqual(a.x, b.x) &&
+      nearlyEqual(a.y, b.y) &&
+      nearlyEqual(a.z, b.z),
+  );
+
+const samePointList = (
+  a: Vec3[] | null | undefined,
+  b: Vec3[] | null | undefined,
+) => {
+  const left = a ?? [];
+  const right = b ?? [];
+  return (
+    left.length === right.length &&
+    left.every((point, index) => samePoint(point, right[index]))
+  );
+};
+
+const sameRebarLine = (
+  a: RebarLine | null | undefined,
+  b: RebarLine | null | undefined,
+) =>
+  (!a && !b) ||
+  Boolean(
+    a &&
+      b &&
+      a.closed === b.closed &&
+      samePointList(a.points, b.points),
+  );
+
 const reframeRebarLine = (
   line: RebarLine,
   fromBasis: LocalBasis | null,
@@ -1035,6 +1072,60 @@ export default function ModelViewer() {
         : null,
     [editingRebarRunId, rebarRuns],
   );
+  const editStartSectionChanged = Boolean(
+    editingRebarRun &&
+      !nearlyEqual(
+        rebarStart,
+        editingRebarRun.startOffset ?? editingRebarRun.start,
+      ),
+  );
+  const editShapeChanged = Boolean(
+    editingRebarRun &&
+      !sameRebarLine(
+        pendingRebarLine ?? rebarLines[0],
+        editingRebarRun.lines[0],
+      ),
+  );
+  const editEndSectionChanged = Boolean(
+    editingRebarRun &&
+      !nearlyEqual(
+        rebarEnd,
+        editingRebarRun.endOffset ?? editingRebarRun.end,
+      ),
+  );
+  const editStartAnchorChanged = Boolean(
+    editingRebarRun &&
+      !samePoint(rebarPathStart, editingRebarRun.pathStart),
+  );
+  const editEndAnchorChanged = Boolean(
+    editingRebarRun &&
+      !samePoint(rebarPathEnd, editingRebarRun.pathEnd),
+  );
+  const editPathChanged = Boolean(
+    editingRebarRun &&
+      !samePointList(
+        rebarPathPoints,
+        editingRebarRun.pathPoints ??
+          (editingRebarRun.pathStart && editingRebarRun.pathEnd
+            ? [editingRebarRun.pathStart, editingRebarRun.pathEnd]
+            : []),
+      ),
+  );
+  const editDetailsChanged = Boolean(
+    editingRebarRun &&
+      (rebarName.trim() !== editingRebarRun.name ||
+        rebarBarNumber.trim().replace(/^#/, "") !==
+          (editingRebarRun.barNumber ?? "5") ||
+        !nearlyEqual(rebarSpacing, editingRebarRun.spacingInches)),
+  );
+  const editingRebarChanged =
+    editStartSectionChanged ||
+    editShapeChanged ||
+    editEndSectionChanged ||
+    editStartAnchorChanged ||
+    editEndAnchorChanged ||
+    editPathChanged ||
+    editDetailsChanged;
   const activeLappedWorkflow =
     rebarWorkflowKind === "lap" ||
     Boolean(editingRebarRun?.lappedFromRunId);
@@ -2373,6 +2464,23 @@ export default function ModelViewer() {
     setGroupDraftOpen(false);
     setGroupDraftName("");
     setStatus(`${group.name} added. Drag bar runs into the folder.`);
+  };
+
+  const deleteEmptyRebarGroup = (groupId: string) => {
+    if (rebarRuns.some((run) => run.groupId === groupId)) return;
+    const group = rebarGroups.find((candidate) => candidate.id === groupId);
+    setRebarGroups((current) =>
+      current.filter((candidate) => candidate.id !== groupId),
+    );
+    setCollapsedRebarGroupIds((current) => {
+      const next = new Set(current);
+      next.delete(groupId);
+      return next;
+    });
+    if (renamingRebarGroupId === groupId) {
+      setRenamingRebarGroupId(null);
+    }
+    setStatus(`${group?.name ?? "Empty group"} deleted.`);
   };
 
   const moveRebarRunToGroup = (
@@ -4989,7 +5097,11 @@ export default function ModelViewer() {
                       className="button primary wide"
                       onClick={confirmRebarStartSection}
                     >
-                      {editingRebarRunId ? "Update Section" : "Confirm Section"}
+                      {editingRebarRunId
+                        ? editStartSectionChanged
+                          ? "Update Start Section"
+                          : "Start Section OK"
+                        : "Confirm Section"}
                     </button>
                   </section>
                 )}
@@ -5054,7 +5166,11 @@ export default function ModelViewer() {
                         }
                       }}
                     >
-                      {editingRebarRunId ? "Update Rebar Shape" : "Confirm Rebar"}
+                      {editingRebarRunId
+                        ? editShapeChanged
+                          ? "Update Rebar Shape"
+                          : "Rebar Shape OK"
+                        : "Confirm Rebar"}
                     </button>
                   </section>
                 )}
@@ -5080,7 +5196,9 @@ export default function ModelViewer() {
                           );
                         }}
                       >
-                        Keep Existing Anchor
+                        {editStartAnchorChanged
+                          ? "Update Start Anchor"
+                          : "Start Anchor OK"}
                       </button>
                     )}
                   </section>
@@ -5211,9 +5329,15 @@ export default function ModelViewer() {
                     >
                       {activeLappedWorkflow
                         ? editingRebarRunId
-                          ? "Update Lapped Bar"
+                          ? editEndSectionChanged || editDetailsChanged
+                            ? "Update Lapped Bar"
+                            : "Lapped Bar OK"
                           : "Finish Lapped Bar"
-                        : "Confirm Section"}
+                        : editingRebarRunId
+                          ? editEndSectionChanged
+                            ? "Update End Section"
+                            : "End Section OK"
+                          : "Confirm Section"}
                     </button>
                   </section>
                 )}
@@ -5253,7 +5377,9 @@ export default function ModelViewer() {
                           );
                         }}
                       >
-                        Keep Existing Endpoint
+                        {editEndAnchorChanged
+                          ? "Update End Anchor"
+                          : "End Anchor OK"}
                       </button>
                     )}
                   </section>
@@ -5289,7 +5415,11 @@ export default function ModelViewer() {
                         }}
                         title="Use the current multipoint path"
                       >
-                        Complete Path
+                        {editingRebarRunId
+                          ? editPathChanged
+                            ? "Update Path"
+                            : "Path OK"
+                          : "Complete Path"}
                       </button>
                     </div>
                   </section>
@@ -5363,7 +5493,11 @@ export default function ModelViewer() {
                       className="button primary wide"
                       onClick={() => finishRebarRun()}
                     >
-                      {editingRebarRunId ? "Update Bar" : "Really Finish Bar"}
+                      {editingRebarRunId
+                        ? editingRebarChanged
+                          ? "Update Bar"
+                          : "Bar OK"
+                        : "Really Finish Bar"}
                     </button>
                   </section>
                 )}
@@ -5511,6 +5645,20 @@ export default function ModelViewer() {
                                   }
                                 />
                               </label>
+                              {groupRuns.length === 0 && (
+                                <button
+                                  type="button"
+                                  className="delete-empty-group"
+                                  aria-label={`Delete empty group ${group.name}`}
+                                  title={`Delete empty group ${group.name}`}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    deleteEmptyRebarGroup(group.id);
+                                  }}
+                                >
+                                  🗑
+                                </button>
+                              )}
                             </div>
                             {!collapsed &&
                               groupRuns.map((run) =>
