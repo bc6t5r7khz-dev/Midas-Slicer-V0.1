@@ -3461,3 +3461,35 @@ input[type="range"]::-moz-range-thumb {
   color: #111;
   box-shadow: inset 0 -2px 0 #111;
 }
+
+/* V48 let lists grow before scrolling */
+.rebar-content > .rebar-plane-manager {
+  max-height: none;
+  flex: 0 1 auto;
+}
+
+.rebar-content .rebar-plane-row:not(.selected):hover > button,
+.rebar-content .rebar-plane-row:not(.selected) > button:hover,
+.rebar-content .rebar-plane-row:not(.selected) > button:focus-visible {
+  border-bottom-color: #d9dcdd !important;
+  box-shadow: none;
+}
+
+.control-rail > .combined-slicing {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.combined-slicing .slicing-workspace {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.combined-slicing .slicing-plane-list,
+.combined-slicing .slice-pin-list {
+  min-height: 34px;
+  max-height: none;
+  flex: 0 1 auto;
+  overflow-y: auto;
+}
