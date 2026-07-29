@@ -433,6 +433,8 @@ button {
 
 .bar-run-list {
   display: grid;
+  align-content: start;
+  grid-auto-rows: max-content;
   max-height: 230px;
   overflow-y: auto;
 }
@@ -610,6 +612,7 @@ button {
 }
 
 .bar-run-group {
+  align-self: start;
   border-bottom: 1px solid #182a34;
 }
 
@@ -2486,7 +2489,7 @@ input[type="range"]::-moz-range-thumb {
 
 /* Compact rebar rail */
 .topbar {
-  grid-template-columns: 340px minmax(0, 1fr) auto;
+  grid-template-columns: 324px minmax(0, 1fr) auto;
 }
 
 .rebar-rail {
@@ -2515,13 +2518,16 @@ input[type="range"]::-moz-range-thumb {
   min-height: 90px;
   max-height: 160px;
   flex: 0 1 160px;
-  grid-template-rows: 28px minmax(48px, 1fr);
-  padding: 7px;
+  grid-template-rows: 26px minmax(48px, 1fr);
+  padding: 0;
 }
 
 .rebar-content .rebar-plane-list {
   min-height: 0;
   max-height: none;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
 }
 
 .rebar-content > .face-list-section {
@@ -2540,14 +2546,14 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .rebar-content .section-heading {
-  min-height: 30px;
-  flex: 0 0 30px;
+  min-height: 26px;
+  flex: 0 0 26px;
   padding: 0 9px;
 }
 
 .rebar-content .section-heading .eyebrow {
   color: #111;
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.1em;
 }
 
@@ -2577,8 +2583,30 @@ input[type="range"]::-moz-range-thumb {
 
 .rebar-content .bar-run-delete {
   border-color: #a82a23;
-  background: #fff0ee;
-  color: #8e211b;
+  background: #a82a23;
+  color: #fff;
+}
+
+.rebar-content .bar-run-delete:hover {
+  border-color: #8e211b;
+  background: #8e211b;
+}
+
+.scale-definition input {
+  border-color: #8d9396;
+  background: #fff;
+  color: #111;
+}
+
+.slicing-plane-row .rebar-plane-rename {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.slicing-plane-row .rebar-plane-rename input {
+  width: 100%;
+  min-width: 0;
 }
 
 .view-menu-clear {
@@ -2593,9 +2621,9 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .rail-footer {
-  min-height: 24px;
+  min-height: 18px;
   justify-content: flex-start;
-  padding: 5px 10px;
+  padding: 3px 10px;
   font-size: 8px;
 }
 

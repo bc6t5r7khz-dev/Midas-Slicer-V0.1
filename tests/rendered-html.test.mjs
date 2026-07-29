@@ -62,6 +62,23 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.doesNotMatch(viewer, /Create or review reinforcement runs/);
   assert.doesNotMatch(viewer, /LOCAL PROCESSING/);
   assert.doesNotMatch(viewer, /Three\.js · browser only/);
+  assert.doesNotMatch(viewer, /Smart Select 1/);
+  assert.doesNotMatch(viewer, /Smart Select 2/);
+  assert.doesNotMatch(viewer, /Smart Select 3/);
+  assert.doesNotMatch(viewer, /Auto-Define/);
+  assert.doesNotMatch(viewer, /MCT ELEMENT SKIN/);
+  assert.doesNotMatch(viewer, /SELECTED NODE/);
+  assert.doesNotMatch(viewer, /restored from this browser/);
+  assert.match(viewer, /showAxes=\{activeTab === "coordinates"\}/);
+  assert.match(
+    viewer,
+    /\{activeTab === "coordinates" && \(\s*<div className="axis-badge"/,
+  );
+  assert.equal(
+    [...viewer.matchAll(/onDoubleClick=/g)].length,
+    1,
+    "plane renaming should only be available in Slicing → Planes",
+  );
   assert.match(viewer, /auto-top-horizontal/);
   assert.match(viewer, /Export Rebar Quantity/);
   assert.match(viewer, /event\.key === "Escape"/);

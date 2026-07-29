@@ -15,7 +15,6 @@ import {
   reframePoint,
   transformNodes,
 } from "../lib/coordinateSystem";
-import { autoHullFaces } from "../lib/autoVolume";
 import { parseMctModel } from "../lib/mctParser";
 import { buildElementSkin } from "../lib/elementSkin";
 import {
@@ -24,12 +23,6 @@ import {
 } from "../lib/rebarGeometry";
 import { createSampleMct } from "../lib/sampleModel";
 import { smartFaceFromSeed } from "../lib/smartSelect";
-import {
-  axisSliceFaceFromSeed,
-  fullPlaneFaceFromSeed,
-  localPatchFaceFromSeed,
-  type SmartAxis,
-} from "../lib/smartSelectVariants";
 import {
   loadWorkspace,
   saveWorkspace,
@@ -53,7 +46,6 @@ import type {
   WorkflowTab,
 } from "../lib/types";
 import {
-  autoBoxFaces,
   buildPolyhedron,
   centroid,
   createFace,
@@ -402,10 +394,8 @@ export default function ModelViewer() {
   const [faces, setFaces] = useState<VolumeFace[]>([]);
   const [definingFaces, setDefiningFaces] = useState(false);
   const [smartSelecting, setSmartSelecting] = useState(false);
-  const [smartVariant, setSmartVariant] = useState<
-    "classic" | "axis" | "local" | "full"
-  >("classic");
-  const [smartAxis, setSmartAxis] = useState<SmartAxis>("x");
+  const smartVariant = "classic" as const;
+  const smartAxis = "x" as const;
   const [draftNodeIds, setDraftNodeIds] = useState<number[]>([]);
   const [fittedFaceConfirmation, setFittedFaceConfirmation] = useState<
     string | null
@@ -1201,8 +1191,6 @@ export default function ModelViewer() {
         setActiveTab(saved.activeTab);
         setDefiningFaces(saved.definingFaces);
         setSmartSelecting(saved.smartSelecting ?? false);
-        setSmartVariant(saved.smartVariant ?? "classic");
-        setSmartAxis(saved.smartAxis ?? "x");
         setDraftNodeIds(saved.draftNodeIds);
         setSelectedFaceIds(new Set(saved.selectedFaceIds));
         setVolumeConfirmed(saved.volumeConfirmed);
@@ -1213,9 +1201,7 @@ export default function ModelViewer() {
         setSelectedNode(
           nodes.find((node) => node.id === saved.selectedNodeId) ?? null,
         );
-        setStatus(
-          `${nodes.length.toLocaleString()} nodes restored from this browser.`,
-        );
+        setStatus("Ready");
       })
       .catch(() => {
         if (!cancelled) {
@@ -1681,34 +1667,11 @@ export default function ModelViewer() {
   const smartPreviewFace = useMemo(() => {
     if (!smartSelecting || !hover) return null;
     try {
-      if (smartVariant === "axis") {
-        return axisSliceFaceFromSeed(
-          allNodes,
-          hover.node.id,
-          tolerance,
-          smartAxis,
-          basis,
-        );
-      }
-      if (smartVariant === "local") {
-        return localPatchFaceFromSeed(allNodes, hover.node.id, tolerance);
-      }
-      if (smartVariant === "full") {
-        return fullPlaneFaceFromSeed(allNodes, hover.node.id, tolerance);
-      }
       return smartFaceFromSeed(allNodes, hover.node.id, tolerance);
     } catch {
       return null;
     }
-  }, [
-    allNodes,
-    basis,
-    hover?.node.id,
-    smartAxis,
-    smartSelecting,
-    smartVariant,
-    tolerance,
-  ]);
+  }, [allNodes, hover?.node.id, smartSelecting, tolerance]);
 
   const applyCoordinateSystem = (
     nextDirectionNodeIds: number[],
@@ -1865,20 +1828,7 @@ export default function ModelViewer() {
       try {
         let candidate = smartPreviewFace;
         if (hover?.node.id !== nodeId || !candidate) {
-          candidate =
-            smartVariant === "axis"
-              ? axisSliceFaceFromSeed(
-                  allNodes,
-                  nodeId,
-                  tolerance,
-                  smartAxis,
-                  basis,
-                )
-              : smartVariant === "local"
-                ? localPatchFaceFromSeed(allNodes, nodeId, tolerance)
-                : smartVariant === "full"
-                  ? fullPlaneFaceFromSeed(allNodes, nodeId, tolerance)
-                  : smartFaceFromSeed(allNodes, nodeId, tolerance);
+          candidate = smartFaceFromSeed(allNodes, nodeId, tolerance);
         }
         const face: VolumeFace = {
           ...candidate,
@@ -2888,33 +2838,6 @@ export default function ModelViewer() {
     setStatus("Volume confirmation undone. Faces are ready for editing.");
   };
 
-  const autoDefine = () => {
-    if (!globalBounds) return;
-    try {
-      const generated = autoHullFaces(allNodes, globalBounds);
-      setFaces(generated);
-      setSelectedFaceIds(new Set());
-      setDraftNodeIds([]);
-      setDefiningFaces(false);
-      setSmartSelecting(false);
-      setVolumeConfirmed(false);
-      setFloorFaceId(null);
-      setStatus(
-        `${generated.length} exact node-defined hull faces generated. Review or confirm the volume.`,
-      );
-      setError(null);
-    } catch (caught) {
-      setError(
-        `${
-          caught instanceof Error ? caught.message : "Hull generation failed."
-        } A bounding box was used instead.`,
-      );
-      const fallback = autoBoxFaces(globalBounds);
-      setFaces(fallback);
-      setStatus("Hull fallback: six bounding faces generated.");
-    }
-  };
-
   const editableFace = useMemo(() => {
     if (!shapeEditingFaceId) return null;
     return (
@@ -2995,63 +2918,18 @@ export default function ModelViewer() {
     [floorOrbitFace],
   );
 
-  const activateSmartSelect = (
-    variant: "classic" | "axis" | "local" | "full",
-  ) => {
-    const next = !smartSelecting || smartVariant !== variant;
+  const activateSmartSelect = () => {
+    const next = !smartSelecting;
     setSmartSelecting(next);
-    setSmartVariant(variant);
     setDefiningFaces(false);
     setDraftNodeIds([]);
     setVolumeConfirmed(false);
-    const descriptions = {
-      classic: "Hover an exterior connected planar patch, then click.",
-      axis: `Tracing the complete local ${smartAxis.toUpperCase()} coordinate plane. Arrow keys cycle axes.`,
-      local: "Hover a node to fit a compact local tangent patch.",
-      full: "Hover a node to fit and trace its complete matching plane.",
-    };
-    setStatus(next ? descriptions[variant] : "Smart Select ended.");
+    setStatus(
+      next
+        ? "Hover an exterior connected planar patch, then click."
+        : "Smart Select ended.",
+    );
   };
-
-  const cycleSmartAxis = useCallback((direction: 1 | -1 = 1) => {
-    setSmartAxis((current) => {
-      const axes: SmartAxis[] = ["x", "y", "z"];
-      const next =
-        axes[(axes.indexOf(current) + direction + axes.length) % axes.length];
-      setStatus(
-        `Smart Select 1 now traces the local ${next.toUpperCase()} plane.`,
-      );
-      return next;
-    });
-  }, []);
-
-  useEffect(() => {
-    if (
-      activeTab !== "volume" ||
-      !smartSelecting ||
-      smartVariant !== "axis"
-    ) {
-      return;
-    }
-    const handleAxisKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, select, [contenteditable='true']")) {
-        return;
-      }
-      if (event.code === "ArrowRight" || event.code === "ArrowUp") {
-        event.preventDefault();
-        cycleSmartAxis(1);
-      } else if (
-        event.code === "ArrowLeft" ||
-        event.code === "ArrowDown"
-      ) {
-        event.preventDefault();
-        cycleSmartAxis(-1);
-      }
-    };
-    window.addEventListener("keydown", handleAxisKey);
-    return () => window.removeEventListener("keydown", handleAxisKey);
-  }, [activeTab, cycleSmartAxis, smartSelecting, smartVariant]);
 
   const renderRebarRunButton = (run: RebarRun) => (
     <button
@@ -3405,41 +3283,10 @@ export default function ModelViewer() {
           <div className="tab-content">
             <section className="panel-section intro compact">
               <span className="eyebrow">CONVEX BOUNDARY</span>
-              <h1>Define the inspection volume</h1>
-              <p>
-                Click a start node, then trace the perimeter in order. Press
-                Space to close the last line back to the start. Smart Select
-                remains available for automatic planar patches.
-              </p>
             </section>
 
             {elements.length > 0 && (
               <section className="panel-section element-skin-section">
-                <div className="section-heading">
-                  <div>
-                    <span className="eyebrow">MCT ELEMENT SKIN</span>
-                    <strong>
-                      {elementSkin.surfaces.length.toLocaleString()} faces
-                    </strong>
-                  </div>
-                  <button onClick={() => setShowElementSkin((value) => !value)}>
-                    {showElementSkin ? "Hide" : "Show"}
-                  </button>
-                </div>
-                <p>
-                  {elementSkin.plateElementCount.toLocaleString()} plate ·{" "}
-                  {elementSkin.solidElementCount.toLocaleString()} solid ·{" "}
-                  {closedElementShells.length} closed shell
-                  {closedElementShells.length === 1 ? "" : "s"}
-                </p>
-                {elementSkin.shells.some((shell) => !shell.closed) && (
-                  <small>
-                    Open edges detected in{" "}
-                    {elementSkin.shells.filter((shell) => !shell.closed).length}{" "}
-                    shell component(s). Tolerant mode can continue without
-                    repairing or deleting them.
-                  </small>
-                )}
                 <button
                   className="button primary wide"
                   disabled={!elementSkin.surfaces.length}
@@ -3522,43 +3369,11 @@ export default function ModelViewer() {
                 {definingFaces ? "Defining…" : "Begin"}
               </button>
               <button
-                className={`button ${
-                  smartSelecting && smartVariant === "classic" ? "primary" : ""
-                }`}
-                onClick={() => activateSmartSelect("classic")}
+                className={`button ${smartSelecting ? "primary" : ""}`}
+                onClick={activateSmartSelect}
                 title="Connected exterior planar patch"
               >
                 Smart Select
-              </button>
-              <button
-                className={`button ${
-                  smartSelecting && smartVariant === "axis" ? "primary" : ""
-                }`}
-                onClick={() => activateSmartSelect("axis")}
-                title="Complete local coordinate plane; arrow keys cycle X, Y, and Z"
-              >
-                Smart Select 1 · {smartAxis.toUpperCase()}
-              </button>
-              <button
-                className={`button ${
-                  smartSelecting && smartVariant === "local" ? "primary" : ""
-                }`}
-                onClick={() => activateSmartSelect("local")}
-                title="Compact best-fit tangent patch around the hovered node"
-              >
-                Smart Select 2
-              </button>
-              <button
-                className={`button ${
-                  smartSelecting && smartVariant === "full" ? "primary" : ""
-                }`}
-                onClick={() => activateSmartSelect("full")}
-                title="Best-fit local plane expanded across all matching nodes"
-              >
-                Smart Select 3
-              </button>
-              <button className="button auto-wide" onClick={autoDefine}>
-                Auto-Define
               </button>
             </div>
 
@@ -3583,24 +3398,8 @@ export default function ModelViewer() {
 
             {smartSelecting && (
               <div className="selection-callout smart-method-callout">
-                <strong>
-                  {smartVariant === "classic"
-                    ? "CONNECTED"
-                    : smartVariant === "axis"
-                      ? `AXIS ${smartAxis.toUpperCase()}`
-                      : smartVariant === "local"
-                        ? "LOCAL FIT"
-                        : "FULL PLANE"}
-                </strong>
-                <span>
-                  {smartVariant === "classic"
-                    ? "Exterior plane with connected-region growth"
-                    : smartVariant === "axis"
-                      ? "All nodes at one local coordinate · Arrow keys cycle"
-                      : smartVariant === "local"
-                        ? "Compact tangent fit around the hovered node"
-                        : "Local plane fit expanded through the complete model"}
-                </span>
+                <strong>CONNECTED</strong>
+                <span>Exterior plane with connected-region growth</span>
               </div>
             )}
 
@@ -3878,16 +3677,52 @@ export default function ModelViewer() {
                           selectedSlicingPlaneId === plane.id ? "selected" : ""
                         }`}
                       >
-                        <button
-                          className="plane-select-button"
-                          onClick={() => selectSlicingPlane(plane.id)}
-                        >
-                          <span
-                            className="plane-color"
-                            style={{ background: plane.color }}
-                          />
-                          <span>{plane.name}</span>
-                        </button>
+                        {renamingRebarPlaneId === plane.id ? (
+                          <div className="rebar-plane-rename">
+                            <i style={{ background: plane.color }} />
+                            <input
+                              autoFocus
+                              defaultValue={plane.name}
+                              aria-label={`Rename ${plane.name}`}
+                              onBlur={(event) => {
+                                const name = event.currentTarget.value.trim();
+                                if (name) {
+                                  setRebarPlanes((current) =>
+                                    current.map((candidate) =>
+                                      candidate.id === plane.id
+                                        ? { ...candidate, name }
+                                        : candidate,
+                                    ),
+                                  );
+                                }
+                                setRenamingRebarPlaneId(null);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.currentTarget.blur();
+                                } else if (event.key === "Escape") {
+                                  setRenamingRebarPlaneId(null);
+                                }
+                              }}
+                            />
+                          </div>
+                        ) : (
+                          <button
+                            className="plane-select-button"
+                            onClick={() => selectSlicingPlane(plane.id)}
+                            onDoubleClick={(event) => {
+                              event.stopPropagation();
+                              setRenamingRebarPlaneId(plane.id);
+                            }}
+                            title="Click to select; double-click to rename"
+                          >
+                            <span
+                              className="plane-color"
+                              style={{ background: plane.color }}
+                            />
+                            <span>{plane.name}</span>
+                          </button>
+                        )}
                         <button
                           className={`plane-star ${favorite ? "favorite" : ""}`}
                           aria-label={
@@ -4161,58 +3996,23 @@ export default function ModelViewer() {
                           previewedRebarPlaneId === plane.id ? "selected" : ""
                         }`}
                       >
-                        {renamingRebarPlaneId === plane.id ? (
-                          <div className="rebar-plane-rename">
-                            <i style={{ background: plane.color }} />
-                            <input
-                              autoFocus
-                              defaultValue={plane.name}
-                              aria-label={`Rename ${plane.name}`}
-                              onBlur={(event) => {
-                                const name = event.currentTarget.value.trim();
-                                if (name) {
-                                  setRebarPlanes((current) =>
-                                    current.map((candidate) =>
-                                      candidate.id === plane.id
-                                        ? { ...candidate, name }
-                                        : candidate,
-                                    ),
-                                  );
-                                }
-                                setRenamingRebarPlaneId(null);
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  event.currentTarget.blur();
-                                } else if (event.key === "Escape") {
-                                  setRenamingRebarPlaneId(null);
-                                }
-                              }}
-                            />
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={
-                              Boolean(editingRebarRunId) &&
-                              plane.id !== activeRebarPlaneId
-                            }
-                            onClick={() => selectRebarPlane(plane.id)}
-                            onDoubleClick={(event) => {
-                              event.stopPropagation();
-                              setRenamingRebarPlaneId(plane.id);
-                            }}
-                            title={
-                              editingRebarRunId &&
-                              plane.id !== activeRebarPlaneId
-                                ? "The drawing plane is locked while editing"
-                                : "Click to show this plane; double-click to rename"
-                            }
-                          >
-                            <i style={{ background: plane.color }} />
-                            <span>{plane.name}</span>
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          disabled={
+                            Boolean(editingRebarRunId) &&
+                            plane.id !== activeRebarPlaneId
+                          }
+                          onClick={() => selectRebarPlane(plane.id)}
+                          title={
+                            editingRebarRunId &&
+                            plane.id !== activeRebarPlaneId
+                              ? "The drawing plane is locked while editing"
+                              : "Click to show this plane"
+                          }
+                        >
+                          <i style={{ background: plane.color }} />
+                          <span>{plane.name}</span>
+                        </button>
                       </div>
                     ))}
                   </div>
@@ -4927,35 +4727,6 @@ export default function ModelViewer() {
           </div>
         )}
 
-        {activeTab !== "rebar" && activeTab !== "slicing" && (
-        <section className="node-card condensed">
-          <span className="eyebrow">SELECTED NODE</span>
-          {selectedNode ? (
-            <>
-              <div className="node-id">#{selectedNode.id}</div>
-              <dl>
-                {(["x", "y", "z"] as const).map((axis) => (
-                  <div key={axis}>
-                    <dt>
-                      {selectedNode.local
-                        ? `L${axis.toUpperCase()}`
-                        : axis.toUpperCase()}
-                    </dt>
-                    <dd>
-                      {formatCoordinate(
-                        (selectedNode.local ?? selectedNode.global)[axis],
-                      )}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            </>
-          ) : (
-            <p>Click a point to inspect it.</p>
-          )}
-        </section>
-        )}
-
         {activeTab === "slicing" &&
           slicingSubtab === "pins" &&
           slicePins.length > 0 && (
@@ -5111,7 +4882,7 @@ export default function ModelViewer() {
             rebarPhase === "path-start" ||
             rebarPhase === "path-end"
           }
-          showAxes={activeTab === "volume" || activeTab === "slicing"}
+          showAxes={activeTab === "coordinates"}
           onPickRebarPoint={pickRebarWorkflowPoint}
           elementEditMode={elementEditMode}
           selectedElementIds={[...selectedElementIds]}
@@ -5124,7 +4895,7 @@ export default function ModelViewer() {
           onInsertFaceVertex={insertFaceVertex}
         />
 
-        {activeTab !== "rebar" && (
+        {activeTab === "coordinates" && (
           <div className="axis-badge" aria-label="Local axis legend">
             <span className="axis-x">X</span>
             <span className="axis-y">Y</span>
