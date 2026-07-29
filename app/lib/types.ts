@@ -137,4 +137,4 @@ export type RebarRun = {
   lines: RebarLine[];
 };
 
-export type WorkflowTab = "volume" | "coordinates" | "slicing" | "rebar";
+export type WorkflowTab = "setup" | "slicing" | "rebar";

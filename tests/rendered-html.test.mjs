@@ -28,8 +28,11 @@ test("server-renders the MCT Section Lab application", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /<title>MCT Section Lab<\/title>/i);
-  assert.match(html, />Model</);
-  assert.match(html, /Axes \+ Scale/);
+  assert.match(html, />Setup</);
+  assert.match(html, />Import</);
+  assert.match(html, /Define Floor Plane/);
+  assert.match(html, /Define X Axis/);
+  assert.match(html, /Define Scale/);
   assert.match(html, /Slicing/);
   assert.match(html, /Rebar/);
   assert.match(html, /Application menus/);
@@ -54,9 +57,8 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /Export Project/);
   assert.match(viewer, /Shift \+ arrows/);
   assert.match(viewer, /Show all Planes/);
-  assert.match(viewer, /Show all Favorite Planes/);
-  assert.match(viewer, /pin-added-notice/);
-  assert.match(viewer, /SAVED VIEWS/);
+  assert.match(viewer, /saved-view-ribbon/);
+  assert.match(viewer, /combined-slicing/);
   assert.match(viewer, /title=\{`\$\{run\.positions\.length\} bars/);
   assert.match(viewer, /danger-outline bar-run-delete/);
   assert.doesNotMatch(viewer, /Create or review reinforcement runs/);
@@ -69,10 +71,10 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.doesNotMatch(viewer, /MCT ELEMENT SKIN/);
   assert.doesNotMatch(viewer, /SELECTED NODE/);
   assert.doesNotMatch(viewer, /restored from this browser/);
-  assert.match(viewer, /showAxes=\{activeTab === "coordinates"\}/);
+  assert.match(viewer, /showAxes=\{activeTab === "setup"\}/);
   assert.match(
     viewer,
-    /\{activeTab === "coordinates" && \(\s*<div className="axis-badge"/,
+    /\{activeTab === "setup" && \(\s*<div className="axis-badge"/,
   );
   assert.equal(
     [...viewer.matchAll(/setRenamingRebarPlaneId\(plane\.id\)/g)].length,
@@ -84,14 +86,14 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /event\.key === "Escape"/);
   assert.match(viewer, /mct-section-lab-project/);
   assert.match(viewer, /Display Rebar/);
-  assert.match(viewer, /Favorite Planes/);
   assert.doesNotMatch(viewer, /PINNED SLICES/);
   assert.match(viewer, /Save as View/);
   assert.match(viewer, /Flip Section/);
-  assert.match(viewer, /Face Definition/);
   assert.match(viewer, /Volume Definition/);
-  assert.match(viewer, /Auto-Volume/);
-  assert.match(viewer, /Volume from Manual Faces/);
+  assert.match(viewer, /Auto Volume/);
+  assert.match(viewer, /Create Volume/);
+  assert.match(viewer, /Smart Face/);
+  assert.match(viewer, /selectedSlicePinIds/);
   assert.match(viewer, /coordinateStep/);
   assert.match(viewer, /favoriteRebarPlaneIds/);
   assert.match(viewer, /Add another keypoint/);

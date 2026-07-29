@@ -1899,10 +1899,10 @@ export default function PointCloudViewport({
     elementMeshRef.current = null;
     triangleElementIdsRef.current = [];
     const solidView = slicingMode || rebarMode;
-    const lineOnly = rebarMode && lineAndBar;
+    const lineOnly = (rebarMode || slicingMode) && lineAndBar;
     const renderElementSkin = rebarMode
       ? showConcreteSkin || lineOnly
-      : showElementSkin || slicingMode;
+      : lineOnly || showElementSkin || slicingMode;
     state.elementGroup.visible = renderElementSkin;
     if (!renderElementSkin || !elementSurfaces.length) return;
 

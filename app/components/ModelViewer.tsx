@@ -103,8 +103,7 @@ function DraftNumberInput({
 }
 
 const TABS: Array<{ id: WorkflowTab; label: string }> = [
-  { id: "volume", label: "Model" },
-  { id: "coordinates", label: "Axes + Scale" },
+  { id: "setup", label: "Setup" },
   { id: "slicing", label: "Slicing" },
   { id: "rebar", label: "Rebar" },
 ];
@@ -388,9 +387,13 @@ export default function ModelViewer() {
   const [selectedElementIds, setSelectedElementIds] = useState<Set<number>>(
     new Set(),
   );
-  const [fileName, setFileName] = useState("Demo bridge lattice");
+  const [fileName, setFileName] = useState("No model imported");
   const [globalBounds, setGlobalBounds] = useState<Bounds | null>(null);
-  const [activeTab, setActiveTab] = useState<WorkflowTab>("volume");
+  const [activeTab, setActiveTab] = useState<WorkflowTab>("setup");
+  const [setupStep, setSetupStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1);
+  const [volumeDefinitionMode, setVolumeDefinitionMode] = useState<
+    "auto" | "manual"
+  >("auto");
   const [faces, setFaces] = useState<VolumeFace[]>([]);
   const [definingFaces, setDefiningFaces] = useState(false);
   const [smartSelecting, setSmartSelecting] = useState(false);
@@ -452,10 +455,13 @@ export default function ModelViewer() {
   >(new Set());
   const [slicingPlaneOffset, setSlicingPlaneOffset] = useState(0);
   const [slicePreviewActive, setSlicePreviewActive] = useState(false);
-  const [flipSliceSection, setFlipSliceSection] = useState(false);
+  const [flipSliceSection, setFlipSliceSection] = useState(true);
   const [slicePins, setSlicePins] = useState<SlicePin[]>([]);
   const [selectedSlicePinId, setSelectedSlicePinId] =
     useState<string | null>(null);
+  const [selectedSlicePinIds, setSelectedSlicePinIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [renamingSliceId, setRenamingSliceId] = useState<string | null>(null);
   const [activeSlicePinId, setActiveSlicePinId] = useState<string | null>(null);
   const [showRebarInSlicing, setShowRebarInSlicing] = useState(false);
@@ -477,7 +483,13 @@ export default function ModelViewer() {
   >(new Set());
   const [groupDraftOpen, setGroupDraftOpen] = useState(false);
   const [groupDraftName, setGroupDraftName] = useState("");
+  const [groupPopoverPosition, setGroupPopoverPosition] = useState({
+    left: 0,
+    top: 0,
+  });
   const [renamingRebarGroupId, setRenamingRebarGroupId] =
+    useState<string | null>(null);
+  const [renamingRebarRunId, setRenamingRebarRunId] =
     useState<string | null>(null);
   const [renamingRebarPlaneId, setRenamingRebarPlaneId] =
     useState<string | null>(null);
@@ -560,8 +572,17 @@ export default function ModelViewer() {
     () => new Set(faces.flatMap((face) => face.nodeIds)),
     [faces],
   );
+  const setupComplete = Boolean(
+    allNodes.length &&
+      volumeConfirmed &&
+      floorFaceId &&
+      basis &&
+      inchesPerModelUnit,
+  );
   const shapeEditingFaceId =
-    activeTab === "volume" &&
+    activeTab === "setup" &&
+    setupStep === 2 &&
+    volumeDefinitionMode === "manual" &&
     !definingFaces &&
     !smartSelecting &&
     selectedFaceIds.size === 1
@@ -760,9 +781,12 @@ export default function ModelViewer() {
     return [Math.min(...values), Math.max(...values)];
   }, [allNodes, displaySlicingPlane]);
   const selectedSlicePin = useMemo(
-    () =>
-      slicePins.find((pin) => pin.id === selectedSlicePinId) ?? null,
-    [selectedSlicePinId, slicePins],
+    () => {
+      if (selectedSlicePinIds.size !== 1) return null;
+      const id = selectedSlicePinIds.values().next().value as string;
+      return slicePins.find((pin) => pin.id === id) ?? null;
+    },
+    [selectedSlicePinIds, slicePins],
   );
   const activeSlicePin = useMemo(
     () => slicePins.find((pin) => pin.id === activeSlicePinId) ?? null,
@@ -771,9 +795,7 @@ export default function ModelViewer() {
   const activeCustomSlice = useMemo(() => {
     if (
       (activeTab === "rebar" && !activeSlicePin) ||
-      (activeTab === "slicing" &&
-        (!slicePreviewActive || slicingSubtab !== "slice") &&
-        !activeSlicePin)
+      (activeTab === "slicing" && !slicePreviewActive && !activeSlicePin)
     ) {
       return null;
     }
@@ -808,7 +830,6 @@ export default function ModelViewer() {
     selectedSlicingPlaneId,
     slicePreviewActive,
     slicingPlaneOffset,
-    slicingSubtab,
   ]);
   const displayRebarPlanePreviews = useMemo(
     () => {
@@ -824,15 +845,9 @@ export default function ModelViewer() {
       }
       if (
         activeTab === "slicing" &&
-        ((slicingSubtab === "planes" && showAllPlanes) ||
-          (slicingSubtab === "slice" && showAllFavoritePlanes))
+        showAllPlanes
       ) {
-        const visibleIds =
-          slicingSubtab === "planes"
-            ? new Set(rebarPlanes.map((plane) => plane.id))
-            : new Set(favoriteRebarPlaneIds);
         return rebarPlanes
-          .filter((plane) => visibleIds.has(plane.id))
           .map((plane) => ({
             id: plane.id,
             color: plane.color,
@@ -841,16 +856,12 @@ export default function ModelViewer() {
               reframeDirection(plane.objectNormal, null, basis),
             ),
             offset:
-              slicingSubtab === "slice" &&
-              plane.id === selectedSlicingPlaneId
-                ? slicingPlaneOffset
-                : 0,
+              plane.id === selectedSlicingPlaneId ? slicingPlaneOffset : 0,
             borderOnly: true,
           }));
       }
       if (
         activeTab === "slicing" &&
-        slicingSubtab === "planes" &&
         selectedSlicingPlaneIds.size
       ) {
         return rebarPlanes
@@ -866,12 +877,31 @@ export default function ModelViewer() {
             borderOnly: true,
           }));
       }
+      if (activeTab === "slicing" && activeSlicePin) {
+        const plane = rebarPlanes.find(
+          (candidate) => candidate.id === activeSlicePin.planeId,
+        );
+        return plane
+          ? [
+              {
+                id: plane.id,
+                color: plane.color,
+                origin: reframePoint(plane.objectOrigin, null, basis),
+                normal: normalize(
+                  reframeDirection(plane.objectNormal, null, basis),
+                ),
+                offset: activeSlicePin.offset,
+                borderOnly: true,
+              },
+            ]
+          : [];
+      }
       if (activeTab === "slicing" && selectedSlicingPlaneId) {
         const planeId = activeSlicePin?.planeId ?? selectedSlicingPlaneId;
         const plane = rebarPlanes.find((candidate) => candidate.id === planeId);
         const offset =
           activeSlicePin?.offset ??
-          (slicingSubtab === "slice" ? slicingPlaneOffset : 0);
+          slicingPlaneOffset;
         return plane
           ? [
               {
@@ -929,16 +959,13 @@ export default function ModelViewer() {
       activeSlicePin,
       activeTab,
       basis,
-      favoriteRebarPlaneIds,
       rebarPhase,
       rebarPlanes,
       previewedRebarPlaneId,
       selectedSlicingPlaneId,
       selectedSlicingPlaneIds,
-      showAllFavoritePlanes,
       showAllPlanes,
       slicingPlaneOffset,
-      slicingSubtab,
     ],
   );
   const rebarPlaneBounds = useMemo<[number, number]>(() => {
@@ -995,9 +1022,12 @@ export default function ModelViewer() {
       rebarGroups.map((group) => [group.id, group.visible]),
     );
     return rebarRuns.filter(
-      (run) => !run.groupId || visibility.get(run.groupId) !== false,
+      (run) =>
+        run.id === rebarReferenceRunId ||
+        !run.groupId ||
+        visibility.get(run.groupId) !== false,
     );
-  }, [rebarGroups, rebarRuns]);
+  }, [rebarGroups, rebarReferenceRunId, rebarRuns]);
   const editingRebarRun = useMemo(
     () =>
       editingRebarRunId
@@ -1098,11 +1128,14 @@ export default function ModelViewer() {
     setRebarRuns([]);
     setRebarPlanes([]);
     setFavoriteRebarPlaneIds([]);
-    setSlicingSubtab("planes");
     setSelectedSlicingPlaneId(null);
+    setSelectedSlicingPlaneIds(new Set());
     setSlicingPlaneOffset(0);
+    setSlicePreviewActive(false);
+    setFlipSliceSection(true);
     setSlicePins([]);
     setSelectedSlicePinId(null);
+    setSelectedSlicePinIds(new Set());
     setActiveSlicePinId(null);
     setShowRebarInSlicing(false);
     setViewpointCaptureRequest(null);
@@ -1142,7 +1175,9 @@ export default function ModelViewer() {
     setXDirectionNodeIds([]);
     setBasis(null);
     setSlice(fullSlice(bounds));
-    setActiveTab("volume");
+    setActiveTab("setup");
+    setSetupStep(2);
+    setVolumeDefinitionMode(nextElements.length ? "auto" : "manual");
     setSelectedNode(null);
   }, []);
 
@@ -1175,10 +1210,7 @@ export default function ModelViewer() {
     void loadWorkspace()
       .then((saved) => {
         if (cancelled) return;
-        if (!saved) {
-          loadText(createSampleMct(), "Demo bridge lattice");
-          return;
-        }
+        if (!saved) return;
         const restoredNodes: ModelNode[] = saved.nodes.map((node) => ({
           ...node,
           local: null,
@@ -1231,7 +1263,18 @@ export default function ModelViewer() {
         setFileName(saved.fileName);
         setGlobalBounds(bounds);
         setFaces(saved.faces);
-        setActiveTab(saved.activeTab);
+        const restoredSetupComplete = Boolean(
+          saved.volumeConfirmed &&
+            saved.floorFaceId &&
+            saved.basis &&
+            saved.inchesPerModelUnit,
+        );
+        setActiveTab(
+          saved.activeTab === "slicing" || saved.activeTab === "rebar"
+            ? saved.activeTab
+            : "setup",
+        );
+        setSetupStep(restoredSetupComplete ? 6 : saved.volumeConfirmed ? 3 : 2);
         setDefiningFaces(saved.definingFaces);
         setSmartSelecting(saved.smartSelecting ?? false);
         setDraftNodeIds(saved.draftNodeIds);
@@ -1248,7 +1291,6 @@ export default function ModelViewer() {
       })
       .catch(() => {
         if (!cancelled) {
-          loadText(createSampleMct(), "Demo bridge lattice");
           setError("The saved workspace could not be restored.");
         }
       })
@@ -1479,7 +1521,31 @@ export default function ModelViewer() {
       setFileName(saved.fileName);
       setGlobalBounds(getBounds(restoredNodes, false));
       setFaces(saved.faces ?? []);
-      setActiveTab(saved.activeTab ?? "volume");
+      const importedSetupComplete = Boolean(
+        saved.volumeConfirmed &&
+          saved.floorFaceId &&
+          saved.basis &&
+          saved.inchesPerModelUnit,
+      );
+      setActiveTab(
+        importedSetupComplete &&
+          (saved.activeTab === "slicing" || saved.activeTab === "rebar")
+          ? saved.activeTab
+          : importedSetupComplete
+            ? "rebar"
+            : "setup",
+      );
+      setSetupStep(
+        importedSetupComplete
+          ? 6
+          : saved.basis
+            ? 5
+            : saved.floorFaceId
+              ? 4
+              : saved.volumeConfirmed
+                ? 3
+                : 2,
+      );
       setDefiningFaces(false);
       setSmartSelecting(false);
       setDraftNodeIds([]);
@@ -1621,12 +1687,28 @@ export default function ModelViewer() {
       setFaces((current) => [...current, face]);
       setDraftNodeIds([]);
       setFittedFaceConfirmation(null);
-      setVolumeConfirmed(false);
-      setStatus(
-        face.fitted
-          ? `${face.label} fitted through the selected nodes. It will knit to adjacent planes when confirmed.`
-          : `${face.label} created. Select the next face.`,
-      );
+      const creatingAutomaticFloor =
+        activeTab === "setup" &&
+        setupStep === 3 &&
+        elementSkinVolume;
+      if (creatingAutomaticFloor) {
+        setFloorFaceId(face.id);
+        setDefiningFaces(false);
+        setSmartSelecting(false);
+        setSetupStep(4);
+        setCoordinateStep("x");
+        setXDirectionNodeIds([]);
+        setStatus(`${face.label} created and set as the floor plane.`);
+      } else {
+        setVolumeConfirmed(false);
+      }
+      if (!creatingAutomaticFloor) {
+        setStatus(
+          face.fitted
+            ? `${face.label} fitted through the selected nodes. It will knit to adjacent planes when confirmed.`
+            : `${face.label} created. Select the next face.`,
+        );
+      }
       setError(null);
     } catch (caught) {
       setError(
@@ -1635,10 +1717,13 @@ export default function ModelViewer() {
     }
   }, [
     allNodes,
+    activeTab,
     draftNodeIds,
+    elementSkinVolume,
     faces.length,
     fittedFaceConfirmation,
     globalBounds,
+    setupStep,
     tolerance,
   ]);
 
@@ -1669,7 +1754,8 @@ export default function ModelViewer() {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (
-        activeTab !== "volume" ||
+        activeTab !== "setup" ||
+        (setupStep !== 2 && setupStep !== 3) ||
         target?.matches("input, textarea, select, [contenteditable='true']")
       ) {
         return;
@@ -1708,7 +1794,7 @@ export default function ModelViewer() {
   ]);
 
   useEffect(() => {
-    if (activeTab !== "coordinates") return;
+    if (activeTab !== "setup" || (setupStep !== 4 && setupStep !== 5)) return;
     const cancelCoordinateStep = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       const target = event.target as HTMLElement | null;
@@ -1724,7 +1810,7 @@ export default function ModelViewer() {
     };
     window.addEventListener("keydown", cancelCoordinateStep);
     return () => window.removeEventListener("keydown", cancelCoordinateStep);
-  }, [activeTab, coordinateStep]);
+  }, [activeTab, coordinateStep, setupStep]);
 
   const smartPreviewFace = useMemo(() => {
     if (!smartSelecting || !hover) return null;
@@ -1756,8 +1842,10 @@ export default function ModelViewer() {
       reframeRebar(basis, nextBasis);
       setAllNodes(transformed);
       setBasis(nextBasis);
+      setInchesPerModelUnit(null);
       setSlice(fullSlice(bounds));
       setCoordinateStep("scale");
+      setSetupStep(5);
       setScaleDefining(true);
       setScaleNodeIds([]);
       setStatus("Floor aligned to XY and local X direction applied.");
@@ -1883,7 +1971,8 @@ export default function ModelViewer() {
     }
 
     if (
-      activeTab === "coordinates" &&
+      activeTab === "setup" &&
+      setupStep === 5 &&
       coordinateStep === "scale" &&
       scaleDefining
     ) {
@@ -1895,7 +1984,7 @@ export default function ModelViewer() {
       return;
     }
 
-    if (activeTab === "volume" && smartSelecting) {
+    if (activeTab === "setup" && smartSelecting) {
       try {
         let candidate = smartPreviewFace;
         if (hover?.node.id !== nodeId || !candidate) {
@@ -1907,8 +1996,17 @@ export default function ModelViewer() {
           label: `Face ${faces.length + 1}`,
         };
         setFaces((current) => [...current, face]);
-        setVolumeConfirmed(false);
-        setStatus(`${face.label} added by Smart Select. Hover for the next.`);
+        if (setupStep === 3 && elementSkinVolume) {
+          setFloorFaceId(face.id);
+          setSmartSelecting(false);
+          setSetupStep(4);
+          setCoordinateStep("x");
+          setXDirectionNodeIds([]);
+          setStatus(`${face.label} created and set as the floor plane.`);
+        } else {
+          setVolumeConfirmed(false);
+          setStatus(`${face.label} added by Smart Face. Hover for the next.`);
+        }
         setError(null);
       } catch (caught) {
         setError(
@@ -1920,7 +2018,7 @@ export default function ModelViewer() {
       return;
     }
 
-    if (activeTab === "volume" && definingFaces) {
+    if (activeTab === "setup" && definingFaces) {
       setFittedFaceConfirmation(null);
       setDraftNodeIds((current) => {
         if (current.includes(nodeId)) {
@@ -1936,13 +2034,21 @@ export default function ModelViewer() {
     }
 
     if (
-      activeTab === "coordinates" &&
+      activeTab === "setup" &&
+      setupStep === 4 &&
       coordinateStep === "x" &&
-      floorFaceId &&
-      xDirectionNodeIds.length < 2
+      floorFaceId
     ) {
-      if (xDirectionNodeIds.includes(nodeId)) return;
-      const next = [...xDirectionNodeIds, nodeId];
+      const next =
+        xDirectionNodeIds.length >= 2
+          ? [nodeId]
+          : xDirectionNodeIds.includes(nodeId)
+            ? xDirectionNodeIds
+            : [...xDirectionNodeIds, nodeId];
+      if (next === xDirectionNodeIds) return;
+      if (xDirectionNodeIds.length >= 2) {
+        setInchesPerModelUnit(null);
+      }
       setXDirectionNodeIds(next);
       setStatus(
         next.length === 1
@@ -1967,6 +2073,7 @@ export default function ModelViewer() {
     setInchesPerModelUnit(scaleDistanceInches / modelDistance);
     setScaleDefining(false);
     setCoordinateStep("idle");
+    setSetupStep(6);
     setStatus(
       `Scale defined: ${scaleDistanceInches} in between nodes ${first.id} and ${second.id}.`,
     );
@@ -2101,18 +2208,29 @@ export default function ModelViewer() {
     const plane = rebarPlanes.find((candidate) => candidate.id === planeId);
     if (!plane) return;
     setSelectedSlicingPlaneIds((current) => {
-      if (!additive) return new Set([planeId]);
+      if (!additive) {
+        setSelectedSlicingPlaneId(planeId);
+        return new Set([planeId]);
+      }
       const next = new Set(current);
       if (next.has(planeId)) next.delete(planeId);
       else next.add(planeId);
+      setSelectedSlicingPlaneId(
+        next.has(planeId)
+          ? planeId
+          : next.size === 1
+            ? [...next][0]
+            : null,
+      );
       return next;
     });
-    setSelectedSlicingPlaneId(planeId);
     setActiveRebarPlaneId(planeId);
     setActiveSlicePinId(null);
+    setSelectedSlicePinId(null);
+    setSelectedSlicePinIds(new Set());
     setPinAddedNotice(null);
     setSlicePreviewActive(false);
-    setFlipSliceSection(false);
+    setFlipSliceSection(true);
     if (!preserveOffset) {
       setSlicingPlaneOffset(0);
     }
@@ -2123,14 +2241,6 @@ export default function ModelViewer() {
     setRebarPlaneDraftNodeIds([]);
     setRebarPhase("plane-create");
     setStatus("New slicing plane: select two nodes.");
-  };
-
-  const toggleFavoritePlane = (planeId: string) => {
-    setFavoriteRebarPlaneIds((current) =>
-      current.includes(planeId)
-        ? current.filter((id) => id !== planeId)
-        : [...current, planeId],
-    );
   };
 
   const createSlicePin = () => {
@@ -2144,33 +2254,55 @@ export default function ModelViewer() {
     };
     setSlicePins((current) => [...current, pin]);
     setSelectedSlicePinId(pin.id);
+    setSelectedSlicePinIds(new Set([pin.id]));
     setActiveSlicePinId(pin.id);
     setPinAddedNotice(`${pin.name} added`);
     setStatus(`${pin.name} saved at this slice.`);
   };
 
-  const activateSlicePin = (pin: SlicePin) => {
+  const activateSlicePin = (pin: SlicePin, applySavedView = false) => {
     setSelectedSlicePinId(pin.id);
-    setSelectedSlicingPlaneId(pin.planeId);
-    setSelectedSlicingPlaneIds(new Set([pin.planeId]));
+    setSelectedSlicePinIds(new Set([pin.id]));
+    setSelectedSlicingPlaneId(null);
+    setSelectedSlicingPlaneIds(new Set());
     setSlicingPlaneOffset(pin.offset);
-    setFlipSliceSection(pin.flipSection ?? false);
+    setFlipSliceSection(pin.flipSection ?? true);
     setSlicePreviewActive(true);
     setActiveSlicePinId(pin.id);
-    if (pin.viewOptions) {
+    if (applySavedView && pin.viewOptions) {
       setShowRebarInSlicing(pin.viewOptions.showRebar);
       setLineAndBar(pin.viewOptions.lineAndBar);
       setShowConcreteSkin(pin.viewOptions.showConcreteSkin);
       setShowAllPlanes(pin.viewOptions.showAllPlanes);
       setShowAllFavoritePlanes(pin.viewOptions.showAllFavoritePlanes);
     }
-    if (pin.viewpoint) {
+    if (applySavedView && pin.viewpoint) {
       setViewpointToApply({
         pinId: pin.id,
         nonce: Date.now(),
         viewpoint: pin.viewpoint,
       });
     }
+  };
+
+  const selectSlicePin = (pin: SlicePin, additive: boolean) => {
+    if (!additive) {
+      activateSlicePin(pin);
+      return;
+    }
+    setSelectedSlicePinIds((current) => {
+      const next = new Set(current);
+      if (next.has(pin.id)) next.delete(pin.id);
+      else next.add(pin.id);
+      setSelectedSlicePinId(next.size === 1 ? [...next][0] : null);
+      return next;
+    });
+    setSelectedSlicingPlaneId(null);
+    setSelectedSlicingPlaneIds(new Set());
+    setSlicingPlaneOffset(pin.offset);
+    setFlipSliceSection(pin.flipSection ?? true);
+    setSlicePreviewActive(true);
+    setActiveSlicePinId(pin.id);
   };
 
   const handleViewpointCaptured = useCallback(
@@ -2206,7 +2338,7 @@ export default function ModelViewer() {
 
   const saveSelectedPinViewpoint = () => {
     if (!selectedSlicePin) return;
-    activateSlicePin(selectedSlicePin);
+    setActiveSlicePinId(selectedSlicePin.id);
     setViewpointCaptureRequest({
       pinId: selectedSlicePin.id,
       nonce: Date.now(),
@@ -2214,14 +2346,15 @@ export default function ModelViewer() {
   };
 
   const deleteSelectedPin = () => {
-    if (!selectedSlicePin) return;
+    if (!selectedSlicePinIds.size) return;
     setSlicePins((current) =>
-      current.filter((pin) => pin.id !== selectedSlicePin.id),
+      current.filter((pin) => !selectedSlicePinIds.has(pin.id)),
     );
     setActiveSlicePinId((current) =>
-      current === selectedSlicePin.id ? null : current,
+      current && selectedSlicePinIds.has(current) ? null : current,
     );
     setSelectedSlicePinId(null);
+    setSelectedSlicePinIds(new Set());
   };
 
   const addRebarGroup = () => {
@@ -2726,21 +2859,23 @@ export default function ModelViewer() {
   ]);
 
   const handleFacePick = (faceId: string) => {
-    if (activeTab === "coordinates" && coordinateStep === "floor") {
+    if (activeTab === "setup" && setupStep === 3 && !elementSkinVolume) {
       setFloorFaceId(faceId);
       setXDirectionNodeIds([]);
       reframeRebar(basis, null);
       setBasis(null);
+      setInchesPerModelUnit(null);
       setAllNodes((current) =>
         current.map((node) => ({ ...node, local: null })),
       );
       if (globalBounds) setSlice(fullSlice(globalBounds));
       setCoordinateStep("x");
+      setSetupStep(4);
       setStatus("Floor selected. Pick two nodes for positive X.");
       return;
     }
 
-    if (activeTab === "volume") {
+    if (activeTab === "setup" && setupStep === 2) {
       setSelectedFaceIds(new Set([faceId]));
       setVolumeConfirmed(false);
       const face = faces.find((candidate) => candidate.id === faceId);
@@ -2914,17 +3049,42 @@ export default function ModelViewer() {
     }
     setVolumeConfirmed(true);
     setElementSkinVolume(false);
+    setFloorFaceId(null);
+    setXDirectionNodeIds([]);
+    reframeRebar(basis, null);
+    setBasis(null);
+    setInchesPerModelUnit(null);
+    setSetupStep(3);
+    setCoordinateStep("floor");
     setDefiningFaces(false);
     setSmartSelecting(false);
     setDraftNodeIds([]);
     setStatus("Closed inspection volume confirmed.");
   };
 
+  const confirmAutomaticElementVolume = () => {
+    if (!elementSkin.surfaces.length) return;
+    setElementSkinVolume(true);
+    setVolumeConfirmed(true);
+    setShowElementSkin(true);
+    setDefiningFaces(false);
+    setSmartSelecting(false);
+    setFloorFaceId(null);
+    setXDirectionNodeIds([]);
+    reframeRebar(basis, null);
+    setBasis(null);
+    setInchesPerModelUnit(null);
+    setSetupStep(3);
+    setCoordinateStep("floor");
+    setStatus("Automatic element volume confirmed. Define the floor plane.");
+  };
+
   const undoVolumeConfirmation = () => {
     setVolumeConfirmed(false);
     setElementSkinVolume(false);
     setConfirmWarning(false);
-    setActiveTab("volume");
+    setActiveTab("setup");
+    setSetupStep(2);
     setDefiningFaces(false);
     setSmartSelecting(false);
     setDraftNodeIds([]);
@@ -3017,7 +3177,9 @@ export default function ModelViewer() {
     setSmartSelecting(next);
     setDefiningFaces(false);
     setDraftNodeIds([]);
-    setVolumeConfirmed(false);
+    if (!(setupStep === 3 && elementSkinVolume)) {
+      setVolumeConfirmed(false);
+    }
     setStatus(
       next
         ? "Hover an exterior connected planar patch, then click."
@@ -3059,13 +3221,44 @@ export default function ModelViewer() {
           }
           setColorPopoverRunId(null);
         }}
+        onDoubleClick={(event) => {
+          event.stopPropagation();
+          if (rebarPhase === "idle") setRenamingRebarRunId(run.id);
+        }}
       >
         <i
           className="bar-run-color"
           style={{ background: run.color ?? REBAR_COLORS[0] }}
           aria-hidden="true"
         />
-        <span><strong>{run.name}</strong></span>
+        <span>
+          {renamingRebarRunId === run.id ? (
+            <input
+              autoFocus
+              defaultValue={run.name}
+              aria-label={`Rename ${run.name}`}
+              onClick={(event) => event.stopPropagation()}
+              onDoubleClick={(event) => event.stopPropagation()}
+              onBlur={(event) => {
+                const name = event.currentTarget.value.trim();
+                if (name) {
+                  setRebarRuns((current) =>
+                    current.map((candidate) =>
+                      candidate.id === run.id ? { ...candidate, name } : candidate,
+                    ),
+                  );
+                }
+                setRenamingRebarRunId(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+                if (event.key === "Escape") setRenamingRebarRunId(null);
+              }}
+            />
+          ) : (
+            <strong>{run.name}</strong>
+          )}
+        </span>
       </button>
       {selectedRebarRunIds.has(run.id) && rebarPhase === "idle" && (
         <div className="bar-run-inline-actions" data-rebar-selection-control>
@@ -3123,6 +3316,20 @@ export default function ModelViewer() {
         const target = event.target as HTMLElement;
         if (!target.closest(".header-menu")) setOpenHeaderMenu(null);
         if (
+          !target.closest(".group-name-popover") &&
+          !target.closest(".header-add-group")
+        ) {
+          setGroupDraftOpen(false);
+        }
+        if (
+          activeTab === "setup" &&
+          setupStep === 2 &&
+          volumeDefinitionMode === "manual" &&
+          !target.closest(".face-list-section")
+        ) {
+          setSelectedFaceIds(new Set());
+        }
+        if (
           activeTab === "rebar" &&
           !target.closest(".viewport") &&
           !target.closest("[data-plane-control]")
@@ -3131,13 +3338,22 @@ export default function ModelViewer() {
         }
         if (
           activeTab === "slicing" &&
-          slicingSubtab === "planes" &&
           !target.closest(".viewport") &&
-          !target.closest("[data-plane-selection-control]")
+          !target.closest("[data-plane-selection-control]") &&
+          !target.closest(".plane-slice-control")
         ) {
           setSelectedSlicingPlaneId(null);
           setSelectedSlicingPlaneIds(new Set());
           setPreviewedRebarPlaneId(null);
+        }
+        if (
+          activeTab === "slicing" &&
+          selectedSlicePinIds.size &&
+          !target.closest(".viewport") &&
+          !target.closest("[data-slice-selection-control]")
+        ) {
+          setSelectedSlicePinId(null);
+          setSelectedSlicePinIds(new Set());
         }
         if (
           activeTab !== "rebar" ||
@@ -3169,7 +3385,10 @@ export default function ModelViewer() {
         event.preventDefault();
         setDragging(false);
         const file = event.dataTransfer.files[0];
-        if (file) void loadFile(file);
+        if (file) {
+          if (/\.mctlab\.json$|\.json$/i.test(file.name)) void importProject(file);
+          else void loadFile(file);
+        }
       }}
     >
       <header className="topbar">
@@ -3323,7 +3542,7 @@ export default function ModelViewer() {
                     )
                   }
                 >
-                  View
+                  Display
                 </button>
                 {openHeaderMenu === "view" && (
                   <div className="header-menu-popover view-menu">
@@ -3358,7 +3577,7 @@ export default function ModelViewer() {
                       />
                       Show Concrete Skin
                     </label>}
-                    {activeTab === "slicing" && slicingSubtab === "planes" && (
+                    {activeTab === "slicing" && (
                       <label>
                         <input
                           type="checkbox"
@@ -3370,42 +3589,6 @@ export default function ModelViewer() {
                         Show all Planes
                       </label>
                     )}
-                    {activeTab === "slicing" && slicingSubtab === "slice" && (
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={showAllFavoritePlanes}
-                          onChange={(event) =>
-                            setShowAllFavoritePlanes(event.target.checked)
-                          }
-                        />
-                        Show all Favorite Planes
-                      </label>
-                    )}
-                    {slicePins.some((pin) => pin.viewpoint) && (
-                      <span>SAVED VIEWS</span>
-                    )}
-                    {slicePins.filter((pin) => pin.viewpoint).map((pin) => (
-                      <button
-                        key={pin.id}
-                        onClick={() => {
-                          activateSlicePin(pin);
-                          setOpenHeaderMenu(null);
-                        }}
-                      >
-                        {pin.name}
-                      </button>
-                    ))}
-                    <button
-                      className="view-menu-clear"
-                      disabled={!activeSlicePinId}
-                      onClick={() => {
-                        setActiveSlicePinId(null);
-                        setOpenHeaderMenu(null);
-                      }}
-                    >
-                      Clear active pin
-                    </button>
                   </div>
                 )}
               </div>
@@ -3454,20 +3637,10 @@ export default function ModelViewer() {
             <button
               key={tab.id}
               className={activeTab === tab.id ? "active" : ""}
+              disabled={tab.id !== "setup" && !setupComplete}
               onClick={() => {
                 setActiveTab(tab.id);
-                if (tab.id === "coordinates") {
-                  setCoordinateStep(
-                    inchesPerModelUnit
-                      ? "idle"
-                      : basis
-                        ? "scale"
-                        : floorFaceId
-                          ? "x"
-                          : "floor",
-                  );
-                  setScaleDefining(Boolean(basis && !inchesPerModelUnit));
-                }
+                if (tab.id === "setup" && setupComplete) setSetupStep(6);
                 if (tab.id === "rebar") setHover(null);
                 if (
                   (tab.id === "slicing" || tab.id === "rebar") &&
@@ -3491,7 +3664,260 @@ export default function ModelViewer() {
           ))}
         </nav>
 
-        {activeTab === "volume" && (
+        {activeTab === "setup" && (
+          <div className="tab-content setup-content">
+            <div className="setup-steps">
+              <section className={`setup-step ${allNodes.length ? "complete" : ""} ${setupStep === 1 ? "active" : ""}`}>
+                <button type="button" className="setup-step-heading" onClick={() => setSetupStep(1)}>
+                  <span>01</span>
+                  <strong>Import</strong>
+                  <small>{allNodes.length ? fileName : "Project or MCT file"}</small>
+                </button>
+                {setupStep === 1 && (
+                  <div className="setup-step-body">
+                    <p>Import a saved MCT Section Lab project or a MIDAS MCT model.</p>
+                    <div className="action-grid">
+                      <button className="button primary" onClick={() => projectInputRef.current?.click()}>
+                        Import Project
+                      </button>
+                      <button className="button" onClick={() => fileInputRef.current?.click()}>
+                        Import MCT
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              <section className={`setup-step ${volumeConfirmed ? "complete" : ""} ${setupStep === 2 ? "active" : ""}`}>
+                <button
+                  type="button"
+                  className="setup-step-heading"
+                  disabled={!allNodes.length}
+                  onClick={() => setSetupStep(2)}
+                >
+                  <span>02</span>
+                  <strong>Volume Definition</strong>
+                  <small>{volumeConfirmed ? "Volume created" : "Enclose the model"}</small>
+                </button>
+                {setupStep === 2 && (
+                  <div className="setup-step-body">
+                    <div className="setup-method-tabs" role="tablist">
+                      <button
+                        type="button"
+                        className={volumeDefinitionMode === "auto" ? "active" : ""}
+                        onClick={() => {
+                          setVolumeDefinitionMode("auto");
+                          setDefiningFaces(false);
+                          setSmartSelecting(false);
+                        }}
+                      >
+                        Auto
+                      </button>
+                      <button
+                        type="button"
+                        className={volumeDefinitionMode === "manual" ? "active" : ""}
+                        onClick={() => setVolumeDefinitionMode("manual")}
+                      >
+                        Manual
+                      </button>
+                    </div>
+                    {volumeDefinitionMode === "auto" ? (
+                      <button
+                        className="button primary wide"
+                        disabled={!elementSkin.surfaces.length}
+                        onClick={confirmAutomaticElementVolume}
+                      >
+                        Auto Volume
+                      </button>
+                    ) : (
+                      <>
+                        <p>Define every exterior face needed to completely enclose the volume.</p>
+                        <div className="action-grid">
+                          <button
+                            className={`button ${definingFaces ? "primary" : ""}`}
+                            onClick={() => {
+                              setDefiningFaces((current) => !current);
+                              setSmartSelecting(false);
+                              setDraftNodeIds([]);
+                            }}
+                          >
+                            {definingFaces ? "Defining…" : "Manual Face"}
+                          </button>
+                          <button
+                            className={`button ${smartSelecting ? "primary" : ""}`}
+                            onClick={activateSmartSelect}
+                          >
+                            Smart Face
+                          </button>
+                        </div>
+                        {(definingFaces || smartSelecting) && (
+                          <div className="selection-callout">
+                            <strong>{definingFaces ? `${draftNodeIds.length} points selected` : "Smart Face active"}</strong>
+                            <span>{definingFaces ? "Trace the boundary and press Space." : "Hover a connected planar face and click."}</span>
+                          </div>
+                        )}
+                        <section className="face-list-section light-list" data-face-selection-control>
+                          <div className="section-heading">
+                            <div>
+                              <span className="eyebrow">DEFINED FACES</span>
+                              <strong>{faces.length}</strong>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFaceIds(new Set(faces.map((face) => face.id)))}
+                            >
+                              All
+                            </button>
+                          </div>
+                          <div className="face-list">
+                            {faces.length ? faces.map((face) => (
+                              <label key={face.id} className={selectedFaceIds.has(face.id) ? "selected" : ""}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedFaceIds.has(face.id)}
+                                  onChange={() => toggleFaceSelection(face.id)}
+                                />
+                                <span>
+                                  <strong>{face.label}</strong>
+                                  <small>{face.nodeIds.length} boundary nodes</small>
+                                </span>
+                              </label>
+                            )) : <p>No faces yet.</p>}
+                          </div>
+                          <div className="list-delete-row">
+                            <button
+                              className="button compact danger-outline"
+                              disabled={!selectedFaceIds.size}
+                              onClick={deleteSelectedFaces}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </section>
+                        <button
+                          className="button primary wide"
+                          disabled={faces.length < 4}
+                          onClick={confirmVolume}
+                        >
+                          Create Volume
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              <section className={`setup-step ${floorFaceId ? "complete" : ""} ${setupStep === 3 ? "active" : ""}`}>
+                <button
+                  type="button"
+                  className="setup-step-heading"
+                  disabled={!volumeConfirmed}
+                  onClick={() => {
+                    setSetupStep(3);
+                    setCoordinateStep("floor");
+                  }}
+                >
+                  <span>03</span>
+                  <strong>Define Floor Plane</strong>
+                  <small>{floorFaceId ? faces.find((face) => face.id === floorFaceId)?.label ?? "Defined" : "Choose the bottom plane"}</small>
+                </button>
+                {setupStep === 3 && (
+                  <div className="setup-step-body">
+                    {elementSkinVolume ? (
+                      <>
+                        <p>Create the bottom face; it will be used automatically as the floor plane.</p>
+                        <div className="action-grid">
+                          <button
+                            className={`button ${definingFaces ? "primary" : ""}`}
+                            onClick={() => {
+                              setDefiningFaces((current) => !current);
+                              setSmartSelecting(false);
+                              setDraftNodeIds([]);
+                            }}
+                          >
+                            {definingFaces ? "Defining…" : "Manual Face"}
+                          </button>
+                          <button className={`button ${smartSelecting ? "primary" : ""}`} onClick={activateSmartSelect}>
+                            Smart Face
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <p>Select one of the manual volume faces in the viewer to use as the floor plane.</p>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              <section className={`setup-step ${basis ? "complete" : ""} ${setupStep === 4 ? "active" : ""}`}>
+                <button
+                  type="button"
+                  className="setup-step-heading"
+                  disabled={!floorFaceId}
+                  onClick={() => {
+                    setSetupStep(4);
+                    setCoordinateStep("x");
+                  }}
+                >
+                  <span>04</span>
+                  <strong>Define X Axis</strong>
+                  <small>{basis ? "Axis applied" : `${xDirectionNodeIds.length}/2 nodes`}</small>
+                </button>
+                {setupStep === 4 && (
+                  <div className="setup-step-body">
+                    <p>Pick two nodes to define the X axis. Point 1 is the origin, Point 2 the positive direction.</p>
+                    <div className="selection-callout">
+                      <strong>{xDirectionNodeIds.length >= 2 ? "Pick a new Point 1 to redefine" : `${xDirectionNodeIds.length}/2 nodes selected`}</strong>
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              <section className={`setup-step ${inchesPerModelUnit ? "complete" : ""} ${setupStep === 5 ? "active" : ""}`}>
+                <button
+                  type="button"
+                  className="setup-step-heading"
+                  disabled={!basis}
+                  onClick={() => {
+                    setSetupStep(5);
+                    setCoordinateStep("scale");
+                    setScaleDefining(true);
+                    setScaleNodeIds([]);
+                  }}
+                >
+                  <span>05</span>
+                  <strong>Define Scale</strong>
+                  <small>{inchesPerModelUnit ? "Scale applied" : "Two nodes and a known distance"}</small>
+                </button>
+                {setupStep === 5 && (
+                  <div className="setup-step-body">
+                    <div className="scale-definition">
+                      <span>{scaleNodeIds.length}/2 nodes selected</span>
+                      <label>
+                        Known distance (inches)
+                        <DraftNumberInput
+                          min={0.001}
+                          step={0.125}
+                          value={scaleDistanceInches}
+                          onValueChange={setScaleDistanceInches}
+                        />
+                      </label>
+                      <button
+                        className="button primary"
+                        disabled={scaleNodeIds.length !== 2}
+                        onClick={applyDefinedScale}
+                      >
+                        Apply Scale
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </section>
+            </div>
+          </div>
+        )}
+
+        {false && (
           <div className="tab-content model-content">
             <h2 className="model-section-title">Face Definition</h2>
             <div className="action-grid">
@@ -3674,7 +4100,7 @@ export default function ModelViewer() {
           </div>
         )}
 
-        {activeTab === "coordinates" && (
+        {false && (
           <div className="tab-content">
             <div className="coordinate-steps">
               <button
@@ -3797,6 +4223,220 @@ export default function ModelViewer() {
         )}
 
         {activeTab === "slicing" && currentBounds && (
+          <div className="tab-content slicing-content combined-slicing">
+            <section className="slicing-workspace">
+              <h2 className="slicing-list-title">Planes List</h2>
+              <div className="slicing-plane-list">
+                {rebarPlanes.map((plane) => (
+                  <div
+                    key={plane.id}
+                    className={`slicing-plane-row ${
+                      selectedSlicingPlaneIds.has(plane.id) ? "selected" : ""
+                    }`}
+                  >
+                    {renamingRebarPlaneId === plane.id ? (
+                      <div className="rebar-plane-rename">
+                        <i style={{ background: plane.color }} />
+                        <input
+                          autoFocus
+                          defaultValue={plane.name}
+                          aria-label={`Rename ${plane.name}`}
+                          onBlur={(event) => {
+                            const name = event.currentTarget.value.trim();
+                            if (name) {
+                              setRebarPlanes((current) =>
+                                current.map((candidate) =>
+                                  candidate.id === plane.id
+                                    ? { ...candidate, name }
+                                    : candidate,
+                                ),
+                              );
+                            }
+                            setRenamingRebarPlaneId(null);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") event.currentTarget.blur();
+                            if (event.key === "Escape") setRenamingRebarPlaneId(null);
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <button
+                        className="plane-select-button"
+                        data-plane-selection-control
+                        onClick={(event) =>
+                          selectSlicingPlane(
+                            plane.id,
+                            false,
+                            event.ctrlKey || event.metaKey,
+                          )
+                        }
+                        onDoubleClick={(event) => {
+                          event.stopPropagation();
+                          setRenamingRebarPlaneId(plane.id);
+                        }}
+                        title="Click to select; Ctrl-click for multiple; double-click to rename"
+                      >
+                        <span className="plane-color" style={{ background: plane.color }} />
+                        <span>{plane.name}</span>
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {!rebarPlanes.length && <p className="empty-list">No project planes yet.</p>}
+              </div>
+              <div className="plane-management-actions plane-list-actions" data-plane-selection-control>
+                <button className="button compact" onClick={beginSlicingPlaneCreation}>
+                  Add Plane
+                </button>
+                <button
+                  className="button compact danger-outline"
+                  disabled={!selectedSlicingPlaneIds.size}
+                  onClick={deleteActiveRebarPlane}
+                >
+                  Delete Plane{selectedSlicingPlaneIds.size > 1 ? "s" : ""}
+                </button>
+              </div>
+              {rebarPhase === "plane-create" && (
+                <div className="selection-callout">
+                  <strong>Defining a plane</strong>
+                  <span>Select two nodes ({rebarPlaneDraftNodeIds.length}/2).</span>
+                </div>
+              )}
+
+              {selectedSlicingPlane && !selectedSlicePinIds.size && (
+                <div className="plane-slice-control">
+                  <div>
+                    <strong>Slicing</strong>
+                    <span>Selected Plane: {selectedSlicingPlane.name}</span>
+                  </div>
+                  <div className="slice-slider-row">
+                    <input
+                      aria-label="Slice position"
+                      type="range"
+                      min={slicingPlaneBounds[0]}
+                      max={slicingPlaneBounds[1]}
+                      step={Math.max(
+                        (slicingPlaneBounds[1] - slicingPlaneBounds[0]) / 500,
+                        0.000001,
+                      )}
+                      value={slicingPlaneOffset}
+                      onChange={(event) => {
+                        setActiveSlicePinId(null);
+                        setSlicePreviewActive(true);
+                        setSlicingPlaneOffset(Number(event.target.value));
+                      }}
+                    />
+                    <DraftNumberInput
+                      className="slice-compact-input"
+                      aria-label="Slice position value"
+                      min={slicingPlaneBounds[0] * (inchesPerModelUnit ?? 1)}
+                      max={slicingPlaneBounds[1] * (inchesPerModelUnit ?? 1)}
+                      step={inchesPerModelUnit ? 0.25 : 0.001}
+                      value={Number(
+                        (slicingPlaneOffset * (inchesPerModelUnit ?? 1)).toFixed(4),
+                      )}
+                      onValueChange={(value) => {
+                        setActiveSlicePinId(null);
+                        setSlicePreviewActive(true);
+                        setSlicingPlaneOffset(
+                          Math.min(
+                            slicingPlaneBounds[1],
+                            Math.max(
+                              slicingPlaneBounds[0],
+                              value / (inchesPerModelUnit ?? 1),
+                            ),
+                          ),
+                        );
+                      }}
+                    />
+                  </div>
+                  <div className="slice-actions">
+                    <button
+                      className={`button ${flipSliceSection ? "primary" : ""}`}
+                      onClick={() => {
+                        setFlipSliceSection((current) => !current);
+                        setSlicePreviewActive(true);
+                      }}
+                    >
+                      Flip Section
+                    </button>
+                    <button className="button primary" onClick={createSlicePin}>
+                      Slice
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <h2 className="slicing-list-title">Slices</h2>
+              <div className="slice-pin-list">
+                {slicePins.map((pin) =>
+                  renamingSliceId === pin.id ? (
+                    <div className="slice-rename-row" key={pin.id} data-slice-selection-control>
+                      <input
+                        autoFocus
+                        defaultValue={pin.name}
+                        onBlur={(event) => {
+                          const name = event.currentTarget.value.trim();
+                          if (name) {
+                            setSlicePins((current) =>
+                              current.map((candidate) =>
+                                candidate.id === pin.id ? { ...candidate, name } : candidate,
+                              ),
+                            );
+                          }
+                          setRenamingSliceId(null);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") event.currentTarget.blur();
+                          if (event.key === "Escape") setRenamingSliceId(null);
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <button
+                      key={pin.id}
+                      data-slice-selection-control
+                      className={`slice-pin-row ${
+                        selectedSlicePinIds.has(pin.id) ? "selected" : ""
+                      } ${pin.viewpoint ? "has-viewpoint" : "no-viewpoint"}`}
+                      onClick={(event) =>
+                        selectSlicePin(pin, event.ctrlKey || event.metaKey)
+                      }
+                      onDoubleClick={() => setRenamingSliceId(pin.id)}
+                      title="Ctrl-click to select multiple; double-click to rename"
+                    >
+                      <span>{pin.name}</span>
+                      <small>
+                        {rebarPlanes.find((plane) => plane.id === pin.planeId)?.name ??
+                          "Missing plane"}
+                      </small>
+                    </button>
+                  ),
+                )}
+                {!slicePins.length && <p className="empty-list">Create a slice above.</p>}
+              </div>
+              <div className="pin-management-actions" data-slice-selection-control>
+                <button
+                  className="button primary"
+                  disabled={!selectedSlicePin}
+                  onClick={saveSelectedPinViewpoint}
+                >
+                  Save as View
+                </button>
+                <button
+                  className="button danger-outline"
+                  disabled={!selectedSlicePinIds.size}
+                  onClick={deleteSelectedPin}
+                >
+                  Delete{selectedSlicePinIds.size > 1 ? " Selected" : ""}
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {false && currentBounds && (
           <div className="tab-content slicing-content">
             <div className="slicing-subtabs" role="tablist">
               {(["planes", "slice"] as const).map((tab) => (
@@ -3883,7 +4523,7 @@ export default function ModelViewer() {
                             }
                             onDoubleClick={(event) => {
                               event.stopPropagation();
-                              setRenamingRebarPlaneId(plane.id);
+                              setRenamingRebarPlaneId(null);
                             }}
                             title="Click to select; double-click to rename"
                           >
@@ -4529,8 +5169,10 @@ export default function ModelViewer() {
                           ))}
                         </div>
                         <label className="custom-bar-number">
+                          <span>Other</span>
+                          <b>#</b>
                           <input
-                            placeholder="Other"
+                            aria-label="Other bar number"
                             className={
                               ["5", "6", "7", "8", "9", "10"].includes(
                                 rebarBarNumber,
@@ -4687,8 +5329,10 @@ export default function ModelViewer() {
                         ))}
                       </div>
                       <label className="custom-bar-number">
+                        <span>Other</span>
+                        <b>#</b>
                         <input
-                          placeholder="Other"
+                          aria-label="Other bar number"
                           className={
                             ["5", "6", "7", "8", "9", "10"].includes(
                               rebarBarNumber,
@@ -4728,13 +5372,20 @@ export default function ModelViewer() {
                   <section className="face-list-section">
                     <div className="section-heading">
                       <span className="eyebrow">BAR RUNS</span>
-                      <div className="bar-runs-heading-actions">
+                      <div className="bar-runs-heading-actions add-group-shell">
                         <strong>{rebarRuns.length}</strong>
                         <button
                           type="button"
                           className="header-add-group"
                           data-rebar-selection-control
-                          onClick={addRebarGroup}
+                          onClick={(event) => {
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            setGroupPopoverPosition({
+                              left: rect.right + 8,
+                              top: Math.min(rect.top - 4, window.innerHeight - 48),
+                            });
+                            addRebarGroup();
+                          }}
                         >
                           Add Group
                         </button>
@@ -4742,6 +5393,7 @@ export default function ModelViewer() {
                           <div
                             className="group-name-popover"
                             data-rebar-selection-control
+                            style={groupPopoverPosition}
                           >
                             <input
                               autoFocus
@@ -4932,7 +5584,7 @@ export default function ModelViewer() {
 
       <section
         className={`viewport ${
-          activeTab === "volume" && volumeConfirmed
+          activeTab === "setup" && volumeConfirmed
             ? "model-volume-confirmed"
             : ""
         }`}
@@ -4954,8 +5606,11 @@ export default function ModelViewer() {
           editableFaceId={editableFace?.id ?? null}
           volumeConfirmed={volumeConfirmed}
           pickTarget={
-            (activeTab === "coordinates" && coordinateStep === "floor") ||
-            (activeTab === "volume" &&
+            (activeTab === "setup" &&
+              setupStep === 3 &&
+              !elementSkinVolume) ||
+            (activeTab === "setup" &&
+              (setupStep === 2 || setupStep === 3) &&
               !definingFaces &&
               !smartSelecting)
               ? "face"
@@ -4970,7 +5625,8 @@ export default function ModelViewer() {
           rebarMode={activeTab === "rebar"}
           showRebarScene={
             activeTab === "rebar" ||
-            (activeTab === "slicing" && showRebarInSlicing) ||
+            (activeTab === "slicing" &&
+              (showRebarInSlicing || lineAndBar)) ||
             (activeTab === "slicing" &&
               displayRebarPlanePreviews.length > 0)
           }
@@ -4984,7 +5640,7 @@ export default function ModelViewer() {
               (rebarPhase === "start" || rebarPhase === "end"))
           }
           rebarRuns={
-            activeTab === "slicing" && !showRebarInSlicing
+            activeTab === "slicing" && !showRebarInSlicing && !lineAndBar
               ? []
               : visibleRebarRuns
           }
@@ -5054,7 +5710,7 @@ export default function ModelViewer() {
             rebarPhase === "path-start" ||
             rebarPhase === "path-end"
           }
-          showAxes={activeTab === "coordinates"}
+          showAxes={activeTab === "setup"}
           onPickRebarPoint={pickRebarWorkflowPoint}
           elementEditMode={elementEditMode}
           selectedElementIds={[...selectedElementIds]}
@@ -5067,7 +5723,41 @@ export default function ModelViewer() {
           onInsertFaceVertex={insertFaceVertex}
         />
 
-        {activeTab === "coordinates" && (
+        {(activeTab === "slicing" || activeTab === "rebar") &&
+          slicePins.some((pin) => pin.viewpoint) && (
+            <div className="saved-view-ribbon" aria-label="Saved views">
+              <div>
+                {slicePins
+                  .filter((pin) => pin.viewpoint)
+                  .map((pin) => (
+                    <button
+                      type="button"
+                      key={pin.id}
+                      className={activeSlicePinId === pin.id ? "active" : ""}
+                      onClick={() => activateSlicePin(pin, true)}
+                    >
+                      {pin.name}
+                    </button>
+                  ))}
+              </div>
+              <button
+                type="button"
+                className="clear-view-button"
+                onClick={() => {
+                  setActiveSlicePinId(null);
+                  setSelectedSlicePinId(null);
+                  setSelectedSlicePinIds(new Set());
+                  setSelectedSlicingPlaneId(null);
+                  setSelectedSlicingPlaneIds(new Set());
+                  setSlicePreviewActive(false);
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          )}
+
+        {activeTab === "setup" && (
           <div className="axis-badge" aria-label="Local axis legend">
             <span className="axis-x">X</span>
             <span className="axis-y">Y</span>
@@ -5109,8 +5799,8 @@ export default function ModelViewer() {
         <div className="drop-overlay">
           <div>
             <span className="drop-icon">↓</span>
-            <strong>Drop MCT file</strong>
-            <small>The *NODE section will be parsed locally</small>
+            <strong>Drop project or MCT file</strong>
+            <small>Project data and MCT geometry are processed locally</small>
           </div>
         </div>
       )}
@@ -5137,6 +5827,14 @@ export default function ModelViewer() {
                   setConfirmWarning(false);
                   setVolumeConfirmed(true);
                   setDefiningFaces(false);
+                  setElementSkinVolume(false);
+                  setFloorFaceId(null);
+                  setXDirectionNodeIds([]);
+                  reframeRebar(basis, null);
+                  setBasis(null);
+                  setInchesPerModelUnit(null);
+                  setSetupStep(3);
+                  setCoordinateStep("floor");
                   setStatus("Open volume accepted with warning.");
                 }}
               >
