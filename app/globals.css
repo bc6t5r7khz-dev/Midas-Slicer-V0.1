@@ -3349,3 +3349,115 @@ input[type="range"]::-moz-range-thumb {
   width: 172px;
   z-index: 70;
 }
+
+/* V47 list alignment, scrollbars, and saved-view feedback */
+.bar-run-footer {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  padding: 7px 0 0;
+  background: #fff;
+}
+
+.rebar-content .bar-run-footer .bar-run-delete {
+  margin-top: 0 !important;
+}
+
+.bar-run-list,
+.rebar-plane-list,
+.slicing-plane-list,
+.slice-pin-list,
+.saved-view-ribbon > div {
+  scrollbar-width: thin;
+  scrollbar-color: #111 #fff;
+}
+
+.bar-run-list::-webkit-scrollbar,
+.rebar-plane-list::-webkit-scrollbar,
+.slicing-plane-list::-webkit-scrollbar,
+.slice-pin-list::-webkit-scrollbar,
+.saved-view-ribbon > div::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.bar-run-list::-webkit-scrollbar-track,
+.rebar-plane-list::-webkit-scrollbar-track,
+.slicing-plane-list::-webkit-scrollbar-track,
+.slice-pin-list::-webkit-scrollbar-track,
+.saved-view-ribbon > div::-webkit-scrollbar-track {
+  border: 1px solid #111;
+  background: #fff;
+}
+
+.bar-run-list::-webkit-scrollbar-thumb,
+.rebar-plane-list::-webkit-scrollbar-thumb,
+.slicing-plane-list::-webkit-scrollbar-thumb,
+.slice-pin-list::-webkit-scrollbar-thumb,
+.saved-view-ribbon > div::-webkit-scrollbar-thumb {
+  border: 1px solid #111;
+  border-radius: 0;
+  background: #111;
+}
+
+.combined-slicing .slicing-plane-list,
+.combined-slicing .slice-pin-list {
+  border: 1px solid #111;
+  background: #fff;
+}
+
+.combined-slicing .slicing-plane-row,
+.combined-slicing .slice-pin-entry {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #d5d8d9;
+  background: #fff;
+}
+
+.combined-slicing .slicing-plane-row:last-child,
+.combined-slicing .slice-pin-entry:last-child {
+  border-bottom: 0;
+}
+
+.combined-slicing .plane-select-button,
+.combined-slicing .slice-pin-row {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 34px;
+  margin: 0;
+  padding: 7px 9px;
+  border: 0;
+  outline: 0;
+  background: #fff !important;
+  color: #111;
+  font: 700 10px/1.2 var(--mono);
+}
+
+.combined-slicing .plane-select-button:hover,
+.combined-slicing .slice-pin-row:hover {
+  background: #e8ebea !important;
+}
+
+.combined-slicing .slicing-plane-row.selected .plane-select-button,
+.combined-slicing .slice-pin-row.selected {
+  background: #fff3bf !important;
+  box-shadow: inset 3px 0 0 #111;
+}
+
+.combined-slicing .slice-pin-row small {
+  color: #59646a;
+  font: 500 8px/1.2 var(--mono);
+}
+
+.combined-slicing .plane-list-actions,
+.combined-slicing .pin-management-actions {
+  margin: 7px 0 10px;
+}
+
+.saved-view-ribbon button:hover:not(.active) {
+  border-color: #111;
+  background: #ffbf47;
+  color: #111;
+  box-shadow: inset 0 -2px 0 #111;
+}
