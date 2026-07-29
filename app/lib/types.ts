@@ -97,7 +97,15 @@ export type SlicePin = {
   name: string;
   planeId: string;
   offset: number;
+  flipSection?: boolean;
   viewpoint?: CameraViewpoint;
+  viewOptions?: {
+    showRebar: boolean;
+    lineAndBar: boolean;
+    showConcreteSkin: boolean;
+    showAllPlanes: boolean;
+    showAllFavoritePlanes: boolean;
+  };
 };
 
 export type RebarRun = {

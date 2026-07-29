@@ -53,12 +53,12 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /Import Project/);
   assert.match(viewer, /Export Project/);
   assert.match(viewer, /Shift \+ arrows/);
-  assert.match(viewer, /Show all planes/);
-  assert.match(viewer, /Display all favorite planes/);
+  assert.match(viewer, /Show all Planes/);
+  assert.match(viewer, /Show all Favorite Planes/);
   assert.match(viewer, /pin-added-notice/);
-  assert.match(viewer, /Clear active pin/);
+  assert.match(viewer, /SAVED VIEWS/);
   assert.match(viewer, /title=\{`\$\{run\.positions\.length\} bars/);
-  assert.match(viewer, /button wide danger-outline bar-run-delete/);
+  assert.match(viewer, /danger-outline bar-run-delete/);
   assert.doesNotMatch(viewer, /Create or review reinforcement runs/);
   assert.doesNotMatch(viewer, /LOCAL PROCESSING/);
   assert.doesNotMatch(viewer, /Three\.js · browser only/);
@@ -75,18 +75,24 @@ test("includes plane-based rebar and quantity export workflows", async () => {
     /\{activeTab === "coordinates" && \(\s*<div className="axis-badge"/,
   );
   assert.equal(
-    [...viewer.matchAll(/onDoubleClick=/g)].length,
+    [...viewer.matchAll(/setRenamingRebarPlaneId\(plane\.id\)/g)].length,
     1,
     "plane renaming should only be available in Slicing → Planes",
   );
   assert.match(viewer, /auto-top-horizontal/);
-  assert.match(viewer, /Export Rebar Quantity/);
+  assert.match(viewer, /Export Bar Quantity/);
   assert.match(viewer, /event\.key === "Escape"/);
   assert.match(viewer, /mct-section-lab-project/);
-  assert.match(viewer, /Display rebar/);
-  assert.match(viewer, /FAVORITE PLANES/);
-  assert.match(viewer, /PINNED SLICES/);
-  assert.match(viewer, /Save Viewpoint/);
+  assert.match(viewer, /Display Rebar/);
+  assert.match(viewer, /Favorite Planes/);
+  assert.doesNotMatch(viewer, /PINNED SLICES/);
+  assert.match(viewer, /Save as View/);
+  assert.match(viewer, /Flip Section/);
+  assert.match(viewer, /Face Definition/);
+  assert.match(viewer, /Volume Definition/);
+  assert.match(viewer, /Auto-Volume/);
+  assert.match(viewer, /Volume from Manual Faces/);
+  assert.match(viewer, /coordinateStep/);
   assert.match(viewer, /favoriteRebarPlaneIds/);
   assert.match(viewer, /Add another keypoint/);
   assert.match(viewer, /rebarPathPoints/);
