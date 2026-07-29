@@ -98,6 +98,11 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /favoriteRebarPlaneIds/);
   assert.match(viewer, /Add another keypoint/);
   assert.match(viewer, /rebarPathPoints/);
+  assert.match(viewer, /delete-empty-group/);
+  assert.match(viewer, /Start Section OK/);
+  assert.match(viewer, /Rebar Shape OK/);
+  assert.match(viewer, /End Section OK/);
+  assert.match(viewer, /Bar OK/);
   assert.doesNotMatch(viewer, /<InchRangeControl/);
   assert.match(types, /export type RebarPlane/);
   assert.match(types, /export type SlicePin/);

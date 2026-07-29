@@ -3304,6 +3304,44 @@ input[type="range"]::-moz-range-thumb {
   font: 700 9px/1 var(--mono);
 }
 
+.bar-run-group-header {
+  grid-template-columns: minmax(0, 1fr) 26px auto;
+}
+
+.bar-run-group-header > button {
+  min-width: 0;
+}
+
+.bar-run-group-header input[type="text"],
+.bar-run-group-header button input[type="text"] {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 120px;
+  height: 25px;
+  padding: 3px 6px;
+  font: 700 10px/1 var(--mono);
+}
+
+.delete-empty-group {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  margin-right: 4px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #8e211b;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.delete-empty-group:hover {
+  background: #8e211b;
+  color: #fff;
+}
+
 .group-name-popover {
   position: fixed;
   right: auto;
