@@ -45,7 +45,7 @@ function convexHull(points: Point2[]) {
 
 function insetConvexPolygon(points: Point2[], distance: number) {
   if (points.length < 3 || distance === 0) return points;
-  return points.map((point, index) => {
+  return points.flatMap((point, index) => {
     const previous = points[(index - 1 + points.length) % points.length];
     const next = points[(index + 1) % points.length];
     const edgeA = { a: point.a - previous.a, b: point.b - previous.b };
@@ -54,6 +54,22 @@ function insetConvexPolygon(points: Point2[], distance: number) {
     const lengthB = Math.hypot(edgeB.a, edgeB.b) || 1;
     const normalA = { a: -edgeA.b / lengthA, b: edgeA.a / lengthA };
     const normalB = { a: -edgeB.b / lengthB, b: edgeB.a / lengthB };
+    const turn = edgeA.a * edgeB.b - edgeA.b * edgeB.a;
+    if (distance > 0 && turn < -1e-10) {
+      // A re-entrant corner cannot use the intersection of the two inset
+      // lines: that intersection lies in the void outside a concave member.
+      // A short bevel keeps both guide points on the concrete side.
+      return [
+        {
+          a: point.a + normalA.a * distance,
+          b: point.b + normalA.b * distance,
+        },
+        {
+          a: point.a + normalB.a * distance,
+          b: point.b + normalB.b * distance,
+        },
+      ];
+    }
     const bisector = {
       a: normalA.a + normalB.a,
       b: normalA.b + normalB.b,
@@ -66,12 +82,52 @@ function insetConvexPolygon(points: Point2[], distance: number) {
       -maximumMiter,
       Math.min(maximumMiter, rawScale),
     );
-    return {
+    return [{
       a: point.a + bisector.a * scale,
       b: point.b + bisector.b * scale,
-    };
+    }];
   });
 }
+
+const pointInPolygon2 = (point: Point2, polygon: Point2[]) => {
+  let inside = false;
+  for (
+    let index = 0, previous = polygon.length - 1;
+    index < polygon.length;
+    previous = index, index += 1
+  ) {
+    const first = polygon[index];
+    const second = polygon[previous];
+    if (
+      (first.b > point.b) !== (second.b > point.b) &&
+      point.a <
+        ((second.a - first.a) * (point.b - first.b)) /
+          (second.b - first.b || 1e-12) +
+          first.a
+    ) {
+      inside = !inside;
+    }
+  }
+  return inside;
+};
+
+const concreteContainmentScore = (outline: Point2[], boundaries: Point2[][]) => {
+  if (!outline.length) return 0;
+  const samples = outline.flatMap((point, index) => {
+    const next = outline[(index + 1) % outline.length];
+    return [
+      point,
+      { a: (point.a + next.a) / 2, b: (point.b + next.b) / 2 },
+    ];
+  });
+  return samples.filter(
+    (sample) =>
+      boundaries.filter((boundary) => pointInPolygon2(sample, boundary))
+        .length %
+        2 ===
+      1,
+  ).length;
+};
 
 const solidEdges = (size: number): Array<[number, number]> => {
   if (size === 4) return [[0, 1], [1, 2], [2, 0], [0, 3], [1, 3], [2, 3]];
@@ -468,7 +524,7 @@ export function createPlaneCoverOutlines(
     if (loop.length >= 3) loops.push(loop);
   }
 
-  return loops
+  const boundaries2 = loops
     .map((loop) =>
       loop.map((point) => {
         const delta = subtract3(point, samplingOrigin);
@@ -489,46 +545,33 @@ export function createPlaneCoverOutlines(
             return sum + point.a * next.b - next.a * point.b;
           }, 0),
         ),
-    )
-    .map((loop, loopIndex, allLoops) => {
+    );
+
+  return boundaries2
+    .map((loop) => {
       const signedArea = loop.reduce((sum, point, index) => {
         const next = loop[(index + 1) % loop.length];
         return sum + point.a * next.b - next.a * point.b;
       }, 0);
       const oriented = signedArea < 0 ? [...loop].reverse() : loop;
-      const center = loop.reduce(
-        (sum, point) => ({
-          a: sum.a + point.a / loop.length,
-          b: sum.b + point.b / loop.length,
-        }),
-        { a: 0, b: 0 },
-      );
-      const nestingDepth = allLoops.filter((candidate, candidateIndex) => {
-        if (candidateIndex === loopIndex) return false;
-        let inside = false;
-        for (
-          let index = 0, previous = candidate.length - 1;
-          index < candidate.length;
-          previous = index, index += 1
-        ) {
-          const first = candidate[index];
-          const second = candidate[previous];
-          if (
-            (first.b > center.b) !== (second.b > center.b) &&
-            center.a <
-              ((second.a - first.a) * (center.b - first.b)) /
-                (second.b - first.b || 1e-12) +
-                first.a
-          ) {
-            inside = !inside;
-          }
-        }
-        return inside;
-      }).length;
-      const inset = insetConvexPolygon(
+      const towardPolygonInterior = insetConvexPolygon(
         oriented,
-        nestingDepth % 2 === 0 ? coverModelUnits : -coverModelUnits,
+        coverModelUnits,
       );
+      const awayFromPolygonInterior = insetConvexPolygon(
+        oriented,
+        -coverModelUnits,
+      );
+      // Do not infer outer-versus-hole from the arithmetic loop centroid. On a
+      // hollow member the outer loop's centroid often lies inside the opening,
+      // which used to reverse the offset and draw the guide outside the member.
+      // Instead, test both offset directions against the actual even/odd solid
+      // cross-section and retain the one with the most points in concrete.
+      const inset =
+        concreteContainmentScore(towardPolygonInterior, boundaries2) >=
+        concreteContainmentScore(awayFromPolygonInterior, boundaries2)
+          ? towardPolygonInterior
+          : awayFromPolygonInterior;
       return inset.map((point) =>
         add3(origin, add3(scale3(u, point.a), scale3(v, point.b))),
       );

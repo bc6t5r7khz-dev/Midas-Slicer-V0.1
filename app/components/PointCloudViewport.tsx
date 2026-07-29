@@ -101,6 +101,8 @@ type Props = {
     origin: Vec3;
     normal: Vec3;
     color: string;
+    offset?: number;
+    borderOnly?: boolean;
   }>;
   inchesPerModelUnit: number | null;
   showConcreteSkin: boolean;
@@ -2573,6 +2575,7 @@ export default function PointCloudViewport({
       color: string | number,
       opacity: number,
       offset = 0,
+      borderOnly = false,
     ) => {
       if (!sliceBounds) return;
       const normal = new THREE.Vector3(
@@ -2622,22 +2625,37 @@ export default function PointCloudViewport({
         center.clone().addScaledVector(u, -uHalf).addScaledVector(v, vHalf),
       ].map((point) => ({ x: point.x, y: point.y, z: point.z }));
       const geometry = triangulatePolygon(corners, displayOffset);
-      state.rebarGroup.add(
-        new THREE.Mesh(
-          geometry,
-          new THREE.MeshBasicMaterial({
-            color,
-            opacity,
-            transparent: true,
-            depthWrite: false,
-            side: THREE.DoubleSide,
-          }),
-        ),
-      );
-      addPolyline(corners, new THREE.Color(color).getHex(), 0.9);
+      if (!borderOnly) {
+        state.rebarGroup.add(
+          new THREE.Mesh(
+            geometry,
+            new THREE.MeshBasicMaterial({
+              color,
+              opacity,
+              transparent: true,
+              depthWrite: false,
+              side: THREE.DoubleSide,
+            }),
+          ),
+        );
+      } else {
+        geometry.dispose();
+      }
+      const border = addPolyline(corners, new THREE.Color(color).getHex(), 0.9);
+      if (border && borderOnly) {
+        border.material.depthTest = false;
+        border.renderOrder = 25;
+      }
     };
     rebarPlanePreviews.forEach((plane) =>
-      addPlanePatch(plane.origin, plane.normal, plane.color, 0.14),
+      addPlanePatch(
+        plane.origin,
+        plane.normal,
+        plane.color,
+        0.14,
+        plane.offset ?? 0,
+        plane.borderOnly ?? false,
+      ),
     );
     if (rebarSection !== null && rebarDrawingPlane) {
       addPlanePatch(

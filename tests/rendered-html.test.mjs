@@ -32,8 +32,8 @@ test("server-renders the MCT Section Lab application", async () => {
   assert.match(html, /Axes \+ Scale/);
   assert.match(html, /Slicing/);
   assert.match(html, /Rebar/);
-  assert.match(html, /Import Project/);
-  assert.match(html, /Export Project/);
+  assert.match(html, /Application menus/);
+  assert.match(html, />File</);
   assert.doesNotMatch(html, /codex-preview/i);
 });
 
@@ -49,7 +49,15 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /Add Plane/);
   assert.match(viewer, /Delete Plane/);
   assert.match(viewer, /Add Group/);
-  assert.match(viewer, /PERIMETER SNAP OFFSETS/);
+  assert.match(viewer, /Primary perimeter offset/);
+  assert.match(viewer, /Import Project/);
+  assert.match(viewer, /Export Project/);
+  assert.match(viewer, /Shift \+ arrows/);
+  assert.match(viewer, /Show all planes/);
+  assert.match(viewer, /Display all favorite planes/);
+  assert.match(viewer, /pin-added-notice/);
+  assert.doesNotMatch(viewer, /Create or review reinforcement runs/);
+  assert.doesNotMatch(viewer, /LOCAL PROCESSING/);
   assert.match(viewer, /auto-top-horizontal/);
   assert.match(viewer, /Export Rebar Quantity/);
   assert.match(viewer, /event\.key === "Escape"/);
