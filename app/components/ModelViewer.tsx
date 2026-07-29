@@ -2352,6 +2352,7 @@ export default function ModelViewer() {
   };
 
   const activateSlicePin = (pin: SlicePin, applySavedView = false) => {
+    setSelectedRebarRunIds(new Set());
     setSelectedSlicePinId(pin.id);
     setSelectedSlicePinIds(new Set([pin.id]));
     setSelectedSlicingPlaneId(null);
@@ -2377,6 +2378,7 @@ export default function ModelViewer() {
   };
 
   const selectSlicePin = (pin: SlicePin, additive: boolean) => {
+    setSelectedRebarRunIds(new Set());
     if (!additive) {
       activateSlicePin(pin);
       return;
@@ -3747,6 +3749,17 @@ export default function ModelViewer() {
               className={activeTab === tab.id ? "active" : ""}
               disabled={tab.id !== "setup" && !setupComplete}
               onClick={() => {
+                if (
+                  activeTab === "rebar" &&
+                  tab.id !== "rebar" &&
+                  rebarPhase !== "idle"
+                ) {
+                  cancelRebarWorkflow();
+                }
+                if (tab.id !== "rebar") {
+                  setSelectedRebarRunIds(new Set());
+                  setColorPopoverRunId(null);
+                }
                 setActiveTab(tab.id);
                 if (tab.id === "setup" && setupComplete) setSetupStep(6);
                 if (tab.id === "rebar") setHover(null);
@@ -4333,7 +4346,7 @@ export default function ModelViewer() {
         {activeTab === "slicing" && currentBounds && (
           <div className="tab-content slicing-content combined-slicing">
             <section className="slicing-workspace">
-              <h2 className="slicing-list-title">Planes List</h2>
+              <h2 className="slicing-list-title">Planes</h2>
               <div className="slicing-plane-list">
                 {rebarPlanes.map((plane) => (
                   <div
@@ -4502,24 +4515,25 @@ export default function ModelViewer() {
                       />
                     </div>
                   ) : (
-                    <button
-                      key={pin.id}
-                      data-slice-selection-control
-                      className={`slice-pin-row ${
-                        selectedSlicePinIds.has(pin.id) ? "selected" : ""
-                      } ${pin.viewpoint ? "has-viewpoint" : "no-viewpoint"}`}
-                      onClick={(event) =>
-                        selectSlicePin(pin, event.ctrlKey || event.metaKey)
-                      }
-                      onDoubleClick={() => setRenamingSliceId(pin.id)}
-                      title="Ctrl-click to select multiple; double-click to rename"
-                    >
-                      <span>{pin.name}</span>
-                      <small>
-                        {rebarPlanes.find((plane) => plane.id === pin.planeId)?.name ??
-                          "Missing plane"}
-                      </small>
-                    </button>
+                    <div className="slice-pin-entry" key={pin.id}>
+                      <button
+                        data-slice-selection-control
+                        className={`slice-pin-row ${
+                          selectedSlicePinIds.has(pin.id) ? "selected" : ""
+                        } ${pin.viewpoint ? "has-viewpoint" : "no-viewpoint"}`}
+                        onClick={(event) =>
+                          selectSlicePin(pin, event.ctrlKey || event.metaKey)
+                        }
+                        onDoubleClick={() => setRenamingSliceId(pin.id)}
+                        title="Ctrl-click to select multiple; double-click to rename"
+                      >
+                        <span>{pin.name}</span>
+                        <small>
+                          {rebarPlanes.find((plane) => plane.id === pin.planeId)?.name ??
+                            "Missing plane"}
+                        </small>
+                      </button>
+                    </div>
                   ),
                 )}
                 {!slicePins.length && <p className="empty-list">Create a slice above.</p>}
@@ -5699,25 +5713,27 @@ export default function ModelViewer() {
                           .map((run) => renderRebarRunButton(run))}
                       </div>
                     </div>
-                    <button
-                      className="button danger-outline bar-run-delete"
-                      data-rebar-selection-control
-                      disabled={
-                        rebarPhase !== "idle" ||
-                        !selectedRebarRunIds.size
-                      }
-                      onClick={() => {
-                        if (!selectedRebarRunIds.size) return;
-                        setRebarRuns((current) =>
-                          current.filter(
-                            (run) => !selectedRebarRunIds.has(run.id),
-                          ),
-                        );
-                        setSelectedRebarRunIds(new Set());
-                      }}
-                    >
-                      Delete Bar Run{selectedRebarRunIds.size > 1 ? "s" : ""}
-                    </button>
+                    <div className="bar-run-footer">
+                      <button
+                        className="button danger-outline bar-run-delete"
+                        data-rebar-selection-control
+                        disabled={
+                          rebarPhase !== "idle" ||
+                          !selectedRebarRunIds.size
+                        }
+                        onClick={() => {
+                          if (!selectedRebarRunIds.size) return;
+                          setRebarRuns((current) =>
+                            current.filter(
+                              (run) => !selectedRebarRunIds.has(run.id),
+                            ),
+                          );
+                          setSelectedRebarRunIds(new Set());
+                        }}
+                      >
+                        Delete Bar Run{selectedRebarRunIds.size > 1 ? "s" : ""}
+                      </button>
+                    </div>
                   </section>
                 )}
               </>
