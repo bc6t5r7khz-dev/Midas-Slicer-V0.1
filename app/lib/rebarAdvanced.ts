@@ -65,25 +65,6 @@ export function pointAlongRebarPath(points: Vec3[], distance: number) {
   return points[points.length - 1];
 }
 
-const projectTowardPlane = (
-  point: Vec3,
-  sourceNormalInput: Vec3,
-  targetNormalInput: Vec3,
-  targetPlanePoint: Vec3,
-  amount: number,
-) => {
-  if (amount <= 0) return point;
-  const sourceNormal = normalize(sourceNormalInput);
-  const targetNormal = normalize(targetNormalInput);
-  const denominator = dot(sourceNormal, targetNormal);
-  const planeDistance = dot(subtract(targetPlanePoint, point), targetNormal);
-  const projected =
-    Math.abs(denominator) > 1e-10
-      ? add(point, scale(sourceNormal, planeDistance / denominator))
-      : add(point, scale(targetNormal, planeDistance));
-  return lerpPoint(point, projected, amount);
-};
-
 const planeIntersection = (
   firstNormalInput: Vec3,
   firstPoint: Vec3,
@@ -188,43 +169,6 @@ export function splayArcLengthAtMidpoint(
   };
 }
 
-const nominalPositionSpacing = (positions: number[]) => {
-  for (let index = 1; index < positions.length; index += 1) {
-    const spacing = positions[index] - positions[index - 1];
-    if (spacing > 1e-12) return spacing;
-  }
-  return 0;
-};
-
-const fanAmounts = (
-  count: number,
-  arcLength: number,
-  nominalSpacing: number,
-) => {
-  if (count <= 1) return [1];
-  if (arcLength <= 1e-12 || nominalSpacing <= 1e-12) {
-    return Array.from({ length: count }, (_, index) => index / (count - 1));
-  }
-  const intervals = count - 1;
-  const fixedIntervals = Math.max(0, intervals - Math.min(5, intervals));
-  const fixedLength = fixedIntervals * nominalSpacing;
-  if (fixedLength >= arcLength) {
-    return Array.from({ length: count }, (_, index) => index / intervals);
-  }
-  const tailIntervals = intervals - fixedIntervals;
-  const tailSpacing = (arcLength - fixedLength) / tailIntervals;
-  const distances = [0];
-  for (let index = 0; index < intervals; index += 1) {
-    distances.push(
-      distances[distances.length - 1] +
-        (index < fixedIntervals ? nominalSpacing : tailSpacing),
-    );
-  }
-  return distances.map((distance) =>
-    Math.max(0, Math.min(1, distance / arcLength)),
-  );
-};
-
 const terminalAnchorAt = (run: RebarRun, fraction: number) => {
   const anchors = [...(run.advanced?.variableLength?.endpointAnchors ?? [])]
     .filter((anchor) => Number.isFinite(anchor.fraction))
@@ -260,8 +204,8 @@ export type RebarInstanceOptions = {
  * Expands one run into the actual bar polylines shown and quantified.
  * Translation follows the saved spacing path. Variable length replaces the
  * final drawn vertex using the interpolated endpoint-control path. Splay
- * rotates complete bars around the intersection of the source and target
- * planes, preserving a circular fan and measuring spacing at mid-bar.
+ * keeps the selected bar anchor on that path while rotating the complete bar
+ * around the anchor, creating the fan between source and target planes.
  */
 export function generateRebarInstances(
   run: RebarRun,
@@ -275,14 +219,19 @@ export function generateRebarInstances(
   const targetNormal = options.targetNormal ?? null;
   const targetOrigin = options.targetOrigin ?? null;
 
-  const linearInstances = positions.map((position, index) => {
+  const instanceAnchors = positions.map((position) => {
     const distance = position + lapOffset;
-    const pathPoint =
+    return (
       run.pathPoints && run.pathPoints.length >= 2
         ? pointAlongRebarPath(run.pathPoints, distance)
         : run.pathStart && run.distributionVector
           ? add(run.pathStart, scale(run.distributionVector, distance))
-          : null;
+          : null
+    );
+  });
+
+  const linearInstances = positions.map((position, index) => {
+    const pathPoint = instanceAnchors[index];
     const translation =
       pathPoint && pathOrigin
         ? subtract(pathPoint, pathOrigin)
@@ -337,71 +286,35 @@ export function generateRebarInstances(
         );
   const firstSplayedIndex =
     splay.scope === "all" ? 0 : linearInstances.length - requestedCount;
-  const fanBase = linearInstances[firstSplayedIndex];
-  const fanSourceOrigin =
-    splay.scope === "all"
-      ? sourceOrigin
-      : fanBase[0]?.points[0] ?? sourceOrigin;
-  const layout = splayArcLengthAtMidpoint(
-    fanBase,
+  const layout = planeIntersection(
     sourceNormal,
-    fanSourceOrigin,
+    sourceOrigin,
     targetNormal,
     targetOrigin,
   );
-  if (!layout) {
-    return linearInstances.map((lines, index) => {
-      if (index < firstSplayedIndex) return lines;
-      const localIndex = index - firstSplayedIndex;
-      const amount =
-        requestedCount <= 1 ? 1 : localIndex / (requestedCount - 1);
-      return lines.map((line) => ({
-        ...line,
-        points: line.points.map((point) =>
-          projectTowardPlane(
-            point,
-            sourceNormal,
-            targetNormal,
-            targetOrigin,
-            amount,
-          ),
-        ),
-      }));
-    });
-  }
-
-  const amounts = fanAmounts(
-    requestedCount,
-    layout.arcLength,
-    nominalPositionSpacing(positions),
-  );
+  if (!layout) return linearInstances;
+  const firstSplayedPosition = positions[firstSplayedIndex] ?? 0;
+  const angleStartPosition =
+    splay.scope === "last" && firstSplayedIndex > 0
+      ? positions[firstSplayedIndex - 1]
+      : firstSplayedPosition;
+  const lastSplayedPosition =
+    positions[positions.length - 1] ?? firstSplayedPosition;
+  const splayedSpan = lastSplayedPosition - angleStartPosition;
   return linearInstances.map((lines, index) => {
     if (index < firstSplayedIndex) return lines;
-    const localIndex = index - firstSplayedIndex;
-    const amount = amounts[localIndex] ?? 1;
-    const sourceLines =
-      splay.scope === "all" || index > firstSplayedIndex
-        ? fanBase.map((line) => ({
-            ...line,
-            points: line.points.map((point) => ({ ...point })),
-          }))
-        : lines;
-    if (options.includeVariableLength !== false) {
-      const endpoint = terminalAnchorAt(
-        run,
-        positions.length <= 1 ? 1 : index / (positions.length - 1),
-      );
-      const finalLine = sourceLines[sourceLines.length - 1];
-      if (endpoint && finalLine?.points.length) {
-        finalLine.points[finalLine.points.length - 1] = { ...endpoint };
-      }
-    }
-    return sourceLines.map((line) => ({
+    const anchor = instanceAnchors[index];
+    if (!anchor) return lines;
+    const amount =
+      requestedCount <= 1 || splayedSpan <= 1e-12
+        ? 1
+        : (positions[index] - angleStartPosition) / splayedSpan;
+    return lines.map((line) => ({
       ...line,
       points: line.points.map((point) =>
         rotateAroundLine(
           point,
-          layout.point,
+          anchor,
           layout.direction,
           layout.angle * amount,
         ),

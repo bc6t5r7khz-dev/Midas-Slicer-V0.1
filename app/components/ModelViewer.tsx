@@ -24,7 +24,6 @@ import {
 import {
   generateRebarInstances,
   rebarInstanceLength,
-  splayArcLengthAtMidpoint,
 } from "../lib/rebarAdvanced";
 import { createSampleMct } from "../lib/sampleModel";
 import { smartFaceFromSeed } from "../lib/smartSelect";
@@ -1353,42 +1352,12 @@ export default function ModelViewer() {
     );
     const chordLength =
       Math.hypot(pathDelta.x, pathDelta.y, pathDelta.z) || 1;
-    let positions = distributeBars(
+    const positions = distributeBars(
       0,
       pathLength,
       spacing,
       inchesPerModelUnit,
     );
-    if (
-      rebarSplayEnabled &&
-      rebarSplayScope === "all" &&
-      displayRebarPlane &&
-      displaySplayTargetPlane
-    ) {
-      const layout = splayArcLengthAtMidpoint(
-        rebarLines,
-        displayRebarPlane.normal,
-        addScaled(
-          displayRebarPlane.origin,
-          displayRebarPlane.normal,
-          rebarStart,
-        ),
-        displaySplayTargetPlane.normal,
-        addScaled(
-          displaySplayTargetPlane.origin,
-          displaySplayTargetPlane.normal,
-          rebarSplayTargetOffset,
-        ),
-      );
-      if (layout && layout.arcLength > 1e-12) {
-        positions = distributeBars(
-          0,
-          layout.arcLength,
-          spacing,
-          inchesPerModelUnit,
-        );
-      }
-    }
     return {
       id: "__advanced-draft__",
       name: rebarName,
@@ -1439,8 +1408,6 @@ export default function ModelViewer() {
   }, [
     activeLappedWorkflow,
     activeRebarPlaneId,
-    displayRebarPlane,
-    displaySplayTargetPlane,
     inchesPerModelUnit,
     rebarAxis,
     rebarBarNumber,
@@ -3491,42 +3458,12 @@ export default function ModelViewer() {
     const spacing = isLapped
       ? referenceRun?.spacingInches ?? editingRun?.spacingInches ?? rebarSpacing
       : rebarSpacing;
-    let runPositions = distributeBars(
+    const runPositions = distributeBars(
       0,
       pathLength,
       spacing,
       inchesPerModelUnit,
     );
-    if (
-      rebarSplayEnabled &&
-      rebarSplayScope === "all" &&
-      displayRebarPlane &&
-      displaySplayTargetPlane
-    ) {
-      const layout = splayArcLengthAtMidpoint(
-        rebarLines,
-        displayRebarPlane.normal,
-        addScaled(
-          displayRebarPlane.origin,
-          displayRebarPlane.normal,
-          rebarStart,
-        ),
-        displaySplayTargetPlane.normal,
-        addScaled(
-          displaySplayTargetPlane.origin,
-          displaySplayTargetPlane.normal,
-          rebarSplayTargetOffset,
-        ),
-      );
-      if (layout && layout.arcLength > 1e-12) {
-        runPositions = distributeBars(
-          0,
-          layout.arcLength,
-          spacing,
-          inchesPerModelUnit,
-        );
-      }
-    }
     const run: RebarRun = {
       id: editingRun?.id ?? `rebar-${crypto.randomUUID()}`,
       name: rebarName.trim() || `Bar Run ${rebarRuns.length + 1}`,

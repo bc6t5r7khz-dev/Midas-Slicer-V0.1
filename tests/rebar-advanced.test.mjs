@@ -23,7 +23,6 @@ vm.runInNewContext(compiled, {
 const {
   generateRebarInstances,
   rebarInstanceLength,
-  splayArcLengthAtMidpoint,
 } = module.exports;
 
 const baseRun = {
@@ -43,40 +42,73 @@ const baseRun = {
   planeId: "source",
 };
 
-test("splay rotates the last X bars onto the target plane around the plane intersection", () => {
+test("splay keeps the selected anchor on its path while rotating bars into a fan", () => {
   const run = {
     ...baseRun,
+    pathPoints: [
+      { x: 0, y: 0, z: 0 },
+      { x: 6, y: 8, z: 0 },
+    ],
     advanced: {
-      splay: { targetPlaneId: "target", scope: "last", count: 1 },
+      splay: { targetPlaneId: "target", scope: "all" },
     },
   };
   const instances = generateRebarInstances(run, {
     sourceNormal: { x: 0, y: 0, z: 1 },
     sourceOrigin: { x: 0, y: 0, z: 0 },
     targetNormal: { x: 1, y: 0, z: 1 },
-    targetOrigin: { x: 0, y: 0, z: 7 },
+    targetOrigin: { x: 0, y: 0, z: 6 },
   });
   assert.equal(instances.length, 3);
-  assert.equal(JSON.stringify(instances[0][0].points[1]), '{"x":1,"y":0,"z":0}');
-  assert.equal(JSON.stringify(instances[1][0].points[1]), '{"x":1,"y":5,"z":0}');
+  assert.equal(
+    JSON.stringify(instances.map((instance) => instance[0].points[0])),
+    JSON.stringify(
+    [
+      { x: 0, y: 0, z: 0 },
+      { x: 3, y: 4, z: 0 },
+      { x: 6, y: 8, z: 0 },
+    ],
+    ),
+  );
+  assert.notEqual(
+    JSON.stringify(instances[1][0].points[1]),
+    JSON.stringify({ x: 4, y: 4, z: 0 }),
+  );
   for (const point of instances[2][0].points) {
-    assert.ok(Math.abs(point.x + point.z - 7) < 1e-9);
-    assert.ok(Math.abs(point.y - 10) < 1e-9);
+    assert.ok(Math.abs(point.x + point.z - 6) < 1e-9);
   }
 });
 
-test("splay spacing is measured on the circular arc at the bar midpoint", () => {
-  const layout = splayArcLengthAtMidpoint(
-    baseRun.lines,
-    { x: 0, y: 0, z: 1 },
-    { x: 0, y: 0, z: 0 },
-    { x: 1, y: 0, z: 1 },
-    { x: 0, y: 0, z: 7 },
+test("splay anchors follow every segment of a multipoint path", () => {
+  const finalDistance = 5 + Math.hypot(6, 3);
+  const run = {
+    ...baseRun,
+    positions: [0, 5, finalDistance],
+    pathPoints: [
+      { x: 0, y: 0, z: 0 },
+      { x: 0, y: 5, z: 0 },
+      { x: 6, y: 8, z: 0 },
+    ],
+    advanced: {
+      splay: { targetPlaneId: "target", scope: "all" },
+    },
+  };
+  const instances = generateRebarInstances(run, {
+    sourceNormal: { x: 0, y: 0, z: 1 },
+    sourceOrigin: { x: 0, y: 0, z: 0 },
+    targetNormal: { x: 1, y: 0, z: 1 },
+    targetOrigin: { x: 0, y: 0, z: 6 },
+  });
+  assert.equal(
+    JSON.stringify(instances.map((instance) => instance[0].points[0])),
+    JSON.stringify(
+    [
+      { x: 0, y: 0, z: 0 },
+      { x: 0, y: 5, z: 0 },
+      { x: 6, y: 8, z: 0 },
+    ],
+    ),
   );
-  assert.ok(layout);
-  assert.ok(Math.abs(layout.angle - Math.PI / 4) < 1e-9);
-  assert.ok(Math.abs(layout.radius - 6.5) < 1e-9);
-  assert.ok(Math.abs(layout.arcLength - (6.5 * Math.PI) / 4) < 1e-9);
 });
 
 test("endpoint anchors interpolate bar length along a run", () => {
