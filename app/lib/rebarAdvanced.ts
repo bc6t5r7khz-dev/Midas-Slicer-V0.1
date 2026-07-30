@@ -21,12 +21,6 @@ const scale = (value: Vec3, amount: number): Vec3 => ({
 const dot = (a: Vec3, b: Vec3) =>
   a.x * b.x + a.y * b.y + a.z * b.z;
 
-const cross = (a: Vec3, b: Vec3): Vec3 => ({
-  x: a.y * b.z - a.z * b.y,
-  y: a.z * b.x - a.x * b.z,
-  z: a.x * b.y - a.y * b.x,
-});
-
 const length = (value: Vec3) =>
   Math.hypot(value.x, value.y, value.z);
 
@@ -65,53 +59,23 @@ export function pointAlongRebarPath(points: Vec3[], distance: number) {
   return points[points.length - 1];
 }
 
-const rotateAroundAxis = (
-  value: Vec3,
-  axisInput: Vec3,
-  angle: number,
-): Vec3 => {
-  const axis = normalize(axisInput);
-  const cosine = Math.cos(angle);
-  const sine = Math.sin(angle);
-  return add(
-    add(
-      scale(value, cosine),
-      scale(cross(axis, value), sine),
-    ),
-    scale(axis, dot(axis, value) * (1 - cosine)),
-  );
-};
-
-const perpendicularTo = (normal: Vec3) =>
-  normalize(
-    cross(
-      normal,
-      Math.abs(normal.x) < 0.8
-        ? { x: 1, y: 0, z: 0 }
-        : { x: 0, y: 1, z: 0 },
-    ),
-  );
-
-const rotateNormalToward = (
+const projectTowardPlane = (
   point: Vec3,
-  anchor: Vec3,
   sourceNormalInput: Vec3,
   targetNormalInput: Vec3,
+  targetPlanePoint: Vec3,
   amount: number,
 ) => {
   if (amount <= 0) return point;
   const sourceNormal = normalize(sourceNormalInput);
   const targetNormal = normalize(targetNormalInput);
-  const cosine = Math.max(-1, Math.min(1, dot(sourceNormal, targetNormal)));
-  const angle = Math.acos(cosine);
-  if (angle <= 1e-10) return point;
-  const rawAxis = cross(sourceNormal, targetNormal);
-  const axis =
-    length(rawAxis) <= 1e-10 ? perpendicularTo(sourceNormal) : normalize(rawAxis);
-  return add(
-    anchor,
-    rotateAroundAxis(subtract(point, anchor), axis, angle * amount),
-  );
+  const denominator = dot(sourceNormal, targetNormal);
+  const planeDistance = dot(subtract(targetPlanePoint, point), targetNormal);
+  const projected =
+    Math.abs(denominator) > 1e-10
+      ? add(point, scale(sourceNormal, planeDistance / denominator))
+      : add(point, scale(targetNormal, planeDistance));
+  return lerpPoint(point, projected, amount);
 };
 
 const splayAmount = (
@@ -155,15 +119,17 @@ const terminalAnchorAt = (run: RebarRun, fraction: number) => {
 export type RebarInstanceOptions = {
   sourceNormal?: Vec3 | null;
   targetNormal?: Vec3 | null;
+  targetOrigin?: Vec3 | null;
   includeVariableLength?: boolean;
   lapOffsetModelUnits?: number;
 };
 
 /**
  * Expands one run into the actual bar polylines shown and quantified.
- * Translation follows the saved spacing path, splay rotates each copy around
- * its path anchor, and variable length replaces the final drawn vertex using
- * the interpolated endpoint-control path.
+ * Translation follows the saved spacing path. Variable length replaces the
+ * final drawn vertex using the interpolated endpoint-control path. Splay then
+ * projects every point along the source-plane normal toward the positioned
+ * target plane, so the final bar is fully anchored to that plane.
  */
 export function generateRebarInstances(
   run: RebarRun,
@@ -174,6 +140,7 @@ export function generateRebarInstances(
   const lapOffset = options.lapOffsetModelUnits ?? 0;
   const sourceNormal = options.sourceNormal ?? null;
   const targetNormal = options.targetNormal ?? null;
+  const targetOrigin = options.targetOrigin ?? null;
 
   return positions.map((position, index) => {
     const distance = position + lapOffset;
@@ -192,31 +159,18 @@ export function generateRebarInstances(
     const fraction =
       positions.length <= 1 ? 1 : index / (positions.length - 1);
     const amount =
-      sourceNormal && targetNormal ? splayAmount(run, index, positions.length) : 0;
-    const anchor =
-      pathPoint ??
-      (run.pathStart && translation
-        ? add(run.pathStart, translation)
-        : run.lines[0]?.points[0] ?? { x: 0, y: 0, z: 0 });
-
+      sourceNormal && targetNormal && targetOrigin
+        ? splayAmount(run, index, positions.length)
+        : 0;
     const lines = run.lines.map((line) => ({
       ...line,
       points: line.points.map((point) => {
-        const translated = translation
+        return translation
           ? add(point, translation)
           : {
               ...point,
               [run.axis]: position + lapOffset,
             };
-        return sourceNormal && targetNormal
-          ? rotateNormalToward(
-              translated,
-              anchor,
-              sourceNormal,
-              targetNormal,
-              amount,
-            )
-          : translated;
       }),
     }));
 
@@ -225,6 +179,19 @@ export function generateRebarInstances(
       const finalLine = lines[lines.length - 1];
       if (endpoint && finalLine?.points.length) {
         finalLine.points[finalLine.points.length - 1] = { ...endpoint };
+      }
+    }
+    if (sourceNormal && targetNormal && targetOrigin && amount > 0) {
+      for (const line of lines) {
+        line.points = line.points.map((point) =>
+          projectTowardPlane(
+            point,
+            sourceNormal,
+            targetNormal,
+            targetOrigin,
+            amount,
+          ),
+        );
       }
     }
     return lines;

@@ -8,6 +8,7 @@ import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeome
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import {
   reframeDirection,
+  reframePoint,
   toLocal,
   transformPlane,
 } from "../lib/coordinateSystem";
@@ -79,6 +80,12 @@ type Props = {
   showRebarPlaneNodes: boolean;
   rebarRuns: RebarRun[];
   rebarPlanes: RebarPlane[];
+  rebarAdvancedAnchors: Array<{
+    id: string;
+    point: Vec3;
+    role: "start" | "end" | "additional";
+    active: boolean;
+  }>;
   selectedRebarRunIds: ReadonlySet<string>;
   showRebarLabels: boolean;
   rebarGuideLines: RebarLine[];
@@ -614,6 +621,7 @@ export default function PointCloudViewport({
   showRebarPlaneNodes,
   rebarRuns,
   rebarPlanes,
+  rebarAdvancedAnchors,
   selectedRebarRunIds,
   showRebarLabels,
   rebarGuideLines,
@@ -2340,13 +2348,32 @@ export default function PointCloudViewport({
       const targetPlane = rebarPlanes.find(
         (plane) => plane.id === run.advanced?.splay?.targetPlaneId,
       );
+      const targetNormal = targetPlane
+        ? reframeDirection(targetPlane.objectNormal, null, basis)
+        : null;
+      const targetBaseOrigin = targetPlane
+        ? reframePoint(targetPlane.objectOrigin, null, basis)
+        : null;
+      const targetOrigin =
+        targetBaseOrigin && targetNormal
+          ? {
+              x:
+                targetBaseOrigin.x +
+                targetNormal.x * (run.advanced?.splay?.targetOffset ?? 0),
+              y:
+                targetBaseOrigin.y +
+                targetNormal.y * (run.advanced?.splay?.targetOffset ?? 0),
+              z:
+                targetBaseOrigin.z +
+                targetNormal.z * (run.advanced?.splay?.targetOffset ?? 0),
+            }
+          : null;
       const instances = generateRebarInstances(run, {
         sourceNormal: sourcePlane
           ? reframeDirection(sourcePlane.objectNormal, null, basis)
           : null,
-        targetNormal: targetPlane
-          ? reframeDirection(targetPlane.objectNormal, null, basis)
-          : null,
+        targetNormal,
+        targetOrigin,
         lapOffsetModelUnits:
           inchesPerModelUnit && run.lapOffsetInches
             ? run.lapOffsetInches / inchesPerModelUnit
@@ -2412,6 +2439,33 @@ export default function PointCloudViewport({
       }
     }
     addRodMeshes(draftSegments, draftJoints, 0xf04b43, true);
+    for (const anchor of rebarAdvancedAnchors) {
+      const radius = Math.max(
+        tolerance * 14,
+        inchesPerModelUnit ? 1.25 / inchesPerModelUnit : tolerance * 18,
+      );
+      const color =
+        anchor.role === "start"
+          ? 0xffc400
+          : anchor.role === "end"
+            ? 0x00cfe8
+            : 0xf28c28;
+      const marker = new THREE.Mesh(
+        new THREE.SphereGeometry(
+          radius * (anchor.active ? 1.3 : 1),
+          18,
+          12,
+        ),
+        new THREE.MeshBasicMaterial({
+          color,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      marker.position.copy(toThree(anchor.point, displayOffset));
+      marker.renderOrder = 40;
+      state.rebarGroup.add(marker);
+    }
     if (rebarOuterEdges?.length) {
       rebarOuterEdges.forEach(([point, next], edgeIndex) => {
         const geometry = new LineSegmentsGeometry();
@@ -2622,6 +2676,7 @@ export default function PointCloudViewport({
     rebarDrawingPlane,
     rebarPlanePreviews,
     rebarPlanes,
+    rebarAdvancedAnchors,
     rebarRuns,
     rebarSection,
     selectedRebarRunIds,

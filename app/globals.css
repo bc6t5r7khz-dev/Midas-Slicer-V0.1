@@ -3634,17 +3634,33 @@ input[type="range"]::-moz-range-thumb {
 
 .endpoint-anchor-list > div {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) 37px 24px;
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr) 44px 24px;
+  align-items: center;
   gap: 4px;
-  padding: 5px;
+  min-height: 42px;
+  padding: 6px;
   border: 1px solid #c8cccd;
   background: #fff;
 }
 
+.endpoint-anchor-row.start-anchor {
+  border-color: #b99000;
+  background: #fff7c2;
+}
+
+.endpoint-anchor-row.end-anchor {
+  border-color: #008ba0;
+  background: #d8f9ff;
+}
+
+.endpoint-anchor-row.additional-anchor {
+  border-color: #d27b1f;
+  background: #fff8ef;
+}
+
 .endpoint-anchor-list > div.picking {
   border-color: #d18400;
-  box-shadow: inset 3px 0 0 #d18400;
+  box-shadow: inset 4px 0 0 #d18400, 0 0 0 2px #ffd36a;
 }
 
 .endpoint-anchor-list label {
@@ -3654,14 +3670,39 @@ input[type="range"]::-moz-range-thumb {
   font: 700 7px/1 var(--mono);
 }
 
-.endpoint-coordinate {
-  min-width: 0;
-  padding-bottom: 7px;
-  overflow: hidden;
-  color: #555b5e;
-  font: 500 7px/1 var(--mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.anchor-role-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #111;
+  font: 800 10px/1 var(--mono);
+}
+
+.anchor-role-label i {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border: 2px solid #111;
+  border-radius: 50%;
+}
+
+.start-anchor .anchor-role-label i {
+  background: #ffc400;
+}
+
+.end-anchor .anchor-role-label i {
+  background: #00cfe8;
+}
+
+.splay-target-position {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 66px;
+  align-items: center;
+  gap: 7px;
+}
+
+.splay-target-position input[type="range"] {
+  min-height: 28px;
 }
 
 .endpoint-anchor-list .remove-endpoint-anchor {

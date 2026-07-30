@@ -99,6 +99,8 @@ export type RebarEndpointAnchor = {
 export type RebarAdvancedDefinition = {
   splay?: {
     targetPlaneId: string;
+    /** Signed distance from the target plane's saved origin, in model units. */
+    targetOffset?: number;
     scope: "all" | "last";
     /** Used when scope is "last". */
     count?: number;

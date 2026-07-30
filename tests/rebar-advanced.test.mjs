@@ -39,7 +39,7 @@ const baseRun = {
   planeId: "source",
 };
 
-test("splay can affect only the last X bars", () => {
+test("splay projects every point of the last X bars onto the target plane", () => {
   const run = {
     ...baseRun,
     advanced: {
@@ -48,14 +48,16 @@ test("splay can affect only the last X bars", () => {
   };
   const instances = generateRebarInstances(run, {
     sourceNormal: { x: 0, y: 0, z: 1 },
-    targetNormal: { x: 1, y: 0, z: 0 },
+    targetNormal: { x: 1, y: 0, z: 1 },
+    targetOrigin: { x: 0, y: 0, z: 7 },
   });
   assert.equal(instances.length, 3);
   assert.equal(JSON.stringify(instances[0][0].points[1]), '{"x":1,"y":0,"z":0}');
-  const lastVector = instances[2][0].points[1];
-  assert.ok(Math.abs(lastVector.x) < 1e-9);
-  assert.ok(Math.abs(lastVector.y - 10) < 1e-9);
-  assert.ok(Math.abs(lastVector.z + 1) < 1e-9);
+  assert.equal(JSON.stringify(instances[1][0].points[1]), '{"x":1,"y":5,"z":0}');
+  for (const point of instances[2][0].points) {
+    assert.ok(Math.abs(point.x + point.z - 7) < 1e-9);
+    assert.ok(Math.abs(point.y - 10) < 1e-9);
+  }
 });
 
 test("endpoint anchors interpolate bar length along a run", () => {

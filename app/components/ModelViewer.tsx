@@ -635,6 +635,7 @@ export default function ModelViewer() {
   const [rebarSplayEnabled, setRebarSplayEnabled] = useState(false);
   const [rebarSplayTargetPlaneId, setRebarSplayTargetPlaneId] =
     useState<string | null>(null);
+  const [rebarSplayTargetOffset, setRebarSplayTargetOffset] = useState(0);
   const [rebarSplayScope, setRebarSplayScope] =
     useState<"all" | "last">("all");
   const [rebarSplayLastCount, setRebarSplayLastCount] = useState(5);
@@ -861,6 +862,43 @@ export default function ModelViewer() {
       ),
     };
   }, [activeRebarPlane, basis]);
+  const activeSplayTargetPlane = useMemo(
+    () =>
+      rebarPlanes.find(
+        (plane) => plane.id === rebarSplayTargetPlaneId,
+      ) ?? null,
+    [rebarPlanes, rebarSplayTargetPlaneId],
+  );
+  const displaySplayTargetPlane = useMemo(() => {
+    if (!activeSplayTargetPlane) return null;
+    return {
+      origin: reframePoint(
+        activeSplayTargetPlane.objectOrigin,
+        null,
+        basis,
+      ),
+      normal: normalize(
+        reframeDirection(
+          activeSplayTargetPlane.objectNormal,
+          null,
+          basis,
+        ),
+      ),
+    };
+  }, [activeSplayTargetPlane, basis]);
+  const splayTargetPlaneBounds = useMemo<[number, number]>(() => {
+    if (!displaySplayTargetPlane || !allNodes.length) return [0, 0];
+    const values = allNodes.map((node) =>
+      dot(
+        subtract(
+          node.local ?? node.global,
+          displaySplayTargetPlane.origin,
+        ),
+        displaySplayTargetPlane.normal,
+      ),
+    );
+    return [Math.min(...values), Math.max(...values)];
+  }, [allNodes, displaySplayTargetPlane]);
   const selectedSlicingPlane = useMemo(
     () =>
       rebarPlanes.find((plane) => plane.id === selectedSlicingPlaneId) ??
@@ -948,6 +986,34 @@ export default function ModelViewer() {
               reframeDirection(plane.objectNormal, null, basis),
             ),
           }));
+      }
+      if (
+        activeTab === "rebar" &&
+        rebarPhase === "spacing" &&
+        advancedRebarOpen &&
+        rebarSplayEnabled &&
+        activeSplayTargetPlane
+      ) {
+        return [
+          {
+            id: activeSplayTargetPlane.id,
+            color: activeSplayTargetPlane.color,
+            origin: reframePoint(
+              activeSplayTargetPlane.objectOrigin,
+              null,
+              basis,
+            ),
+            normal: normalize(
+              reframeDirection(
+                activeSplayTargetPlane.objectNormal,
+                null,
+                basis,
+              ),
+            ),
+            offset: rebarSplayTargetOffset,
+            borderOnly: true,
+          },
+        ];
       }
       if (
         activeTab === "slicing" &&
@@ -1063,10 +1129,14 @@ export default function ModelViewer() {
     },
     [
       activeSlicePin,
+      activeSplayTargetPlane,
       activeTab,
+      advancedRebarOpen,
       basis,
       rebarPhase,
       rebarPlanes,
+      rebarSplayEnabled,
+      rebarSplayTargetOffset,
       previewedRebarPlaneId,
       selectedSlicingPlaneId,
       selectedSlicingPlaneIds,
@@ -1193,6 +1263,10 @@ export default function ModelViewer() {
         (rebarSplayEnabled &&
           (rebarSplayTargetPlaneId !==
             editingRebarRun.advanced?.splay?.targetPlaneId ||
+            !nearlyEqual(
+              rebarSplayTargetOffset,
+              editingRebarRun.advanced?.splay?.targetOffset ?? 0,
+            ) ||
             rebarSplayScope !==
               (editingRebarRun.advanced?.splay?.scope ?? "all") ||
             (rebarSplayScope === "last" &&
@@ -1285,6 +1359,7 @@ export default function ModelViewer() {
                 rebarSplayEnabled && rebarSplayTargetPlaneId
                   ? {
                       targetPlaneId: rebarSplayTargetPlaneId,
+                      targetOffset: rebarSplayTargetOffset,
                       scope: rebarSplayScope,
                       count:
                         rebarSplayScope === "last"
@@ -1321,6 +1396,7 @@ export default function ModelViewer() {
     rebarSplayLastCount,
     rebarSplayScope,
     rebarSplayTargetPlaneId,
+    rebarSplayTargetOffset,
     rebarStart,
     rebarVariableLengthEnabled,
   ]);
@@ -1338,6 +1414,83 @@ export default function ModelViewer() {
     rebarEndpointAnchors,
     rebarStart,
   ]);
+  const displayAdvancedAnchors = useMemo(() => {
+    if (
+      rebarPhase !== "spacing" ||
+      !rebarVariableLengthEnabled ||
+      !draftAdvancedRun ||
+      rebarEndpointAnchors.length < 2
+    ) {
+      return [];
+    }
+    const sourcePlane = rebarPlanes.find(
+      (plane) => plane.id === draftAdvancedRun.planeId,
+    );
+    const targetPlane = rebarPlanes.find(
+      (plane) =>
+        plane.id === draftAdvancedRun.advanced?.splay?.targetPlaneId,
+    );
+    const targetNormal = targetPlane
+      ? normalize(
+          reframeDirection(targetPlane.objectNormal, null, basis),
+        )
+      : null;
+    const targetBaseOrigin = targetPlane
+      ? reframePoint(targetPlane.objectOrigin, null, basis)
+      : null;
+    const instances = generateRebarInstances(draftAdvancedRun, {
+      sourceNormal: sourcePlane
+        ? reframeDirection(sourcePlane.objectNormal, null, basis)
+        : null,
+      targetNormal,
+      targetOrigin:
+        targetBaseOrigin && targetNormal
+          ? addScaled(
+              targetBaseOrigin,
+              targetNormal,
+              draftAdvancedRun.advanced?.splay?.targetOffset ?? 0,
+            )
+          : null,
+    });
+    const anchors = [...rebarEndpointAnchors].sort(
+      (a, b) => a.fraction - b.fraction,
+    );
+    return anchors.flatMap((anchor, index) => {
+      const instanceIndex = Math.max(
+        0,
+        Math.min(
+          instances.length - 1,
+          Math.round(anchor.fraction * Math.max(instances.length - 1, 0)),
+        ),
+      );
+      const instance = instances[instanceIndex];
+      const finalLine = instance?.[instance.length - 1];
+      const point = finalLine?.points[finalLine.points.length - 1];
+      return point
+        ? [
+            {
+              id: anchor.id,
+              point,
+              role:
+                index === 0
+                  ? ("start" as const)
+                  : index === anchors.length - 1
+                    ? ("end" as const)
+                    : ("additional" as const),
+              active: advancedAnchorPickingId === anchor.id,
+            },
+          ]
+        : [];
+    });
+  }, [
+    advancedAnchorPickingId,
+    basis,
+    draftAdvancedRun,
+    rebarEndpointAnchors,
+    rebarPhase,
+    rebarPlanes,
+    rebarVariableLengthEnabled,
+  ]);
 
   const rebarGuideLines = useMemo(() => {
     if (
@@ -1351,11 +1504,12 @@ export default function ModelViewer() {
       return [];
     }
     const offset =
-      rebarPhase === "path-end" ||
+      advancedAnchorSection ??
+      (rebarPhase === "path-end" ||
       rebarPhase === "path-review" ||
       rebarPhase === "spacing"
         ? rebarEnd
-        : rebarStart;
+        : rebarStart);
     return createPlaneCoverOutlines(
       allNodes,
       elements,
@@ -1369,6 +1523,7 @@ export default function ModelViewer() {
     }));
   }, [
     allNodes,
+    advancedAnchorSection,
     elements,
     inchesPerModelUnit,
     displayRebarPlane,
@@ -1389,11 +1544,12 @@ export default function ModelViewer() {
       return [];
     }
     const offset =
-      rebarPhase === "path-end" ||
+      advancedAnchorSection ??
+      (rebarPhase === "path-end" ||
       rebarPhase === "path-review" ||
       rebarPhase === "spacing"
         ? rebarEnd
-        : rebarStart;
+        : rebarStart);
     return createPlaneCoverOutlines(
       allNodes,
       elements,
@@ -1407,6 +1563,7 @@ export default function ModelViewer() {
     }));
   }, [
     allNodes,
+    advancedAnchorSection,
     elements,
     inchesPerModelUnit,
     displayRebarPlane,
@@ -1452,6 +1609,7 @@ export default function ModelViewer() {
     setAdvancedRebarOpen(false);
     setRebarSplayEnabled(false);
     setRebarSplayTargetPlaneId(null);
+    setRebarSplayTargetOffset(0);
     setRebarSplayScope("all");
     setRebarSplayLastCount(5);
     setRebarVariableLengthEnabled(false);
@@ -1891,13 +2049,27 @@ export default function ModelViewer() {
       const targetPlane = rebarPlanes.find(
         (plane) => plane.id === run.advanced?.splay?.targetPlaneId,
       );
+      const targetNormal = targetPlane
+        ? normalize(
+            reframeDirection(targetPlane.objectNormal, null, basis),
+          )
+        : null;
+      const targetBaseOrigin = targetPlane
+        ? reframePoint(targetPlane.objectOrigin, null, basis)
+        : null;
       const lengthsFeet = generateRebarInstances(run, {
         sourceNormal: sourcePlane
           ? reframeDirection(sourcePlane.objectNormal, null, basis)
           : null,
-        targetNormal: targetPlane
-          ? reframeDirection(targetPlane.objectNormal, null, basis)
-          : null,
+        targetNormal,
+        targetOrigin:
+          targetBaseOrigin && targetNormal
+            ? addScaled(
+                targetBaseOrigin,
+                targetNormal,
+                run.advanced?.splay?.targetOffset ?? 0,
+              )
+            : null,
         lapOffsetModelUnits: run.lapOffsetInches
           ? run.lapOffsetInches / inchesPerModelUnit
           : 0,
@@ -1913,6 +2085,7 @@ export default function ModelViewer() {
         lengthsFeet.length > 0 ? totalFeet / lengthsFeet.length : 0;
       return {
         name: run.name,
+        tags: run.advanced?.variableLength ? "Varying" : "",
         quantity: run.positions.length,
         barNumber: run.barNumber ?? "5",
         lengthFeet: averageLengthFeet,
@@ -1939,7 +2112,7 @@ export default function ModelViewer() {
     const scheduleRows = rows
       .map(
         (row) =>
-          `<Row>${cell("String", row.name)}${cell("Number", row.quantity)}${cell("String", `#${row.barNumber}`)}${cell("Number", Number(row.lengthFeet.toFixed(3)))}${cell("Number", Number(row.minimumLengthFeet.toFixed(3)))}${cell("Number", Number(row.maximumLengthFeet.toFixed(3)))}${cell("Number", Number(row.totalFeet.toFixed(3)))}</Row>`,
+          `<Row>${cell("String", row.name)}${cell("String", row.tags)}${cell("Number", row.quantity)}${cell("String", `#${row.barNumber}`)}${cell("Number", Number(row.lengthFeet.toFixed(3)))}${cell("Number", Number(row.minimumLengthFeet.toFixed(3)))}${cell("Number", Number(row.maximumLengthFeet.toFixed(3)))}${cell("Number", Number(row.totalFeet.toFixed(3)))}</Row>`,
       )
       .join("");
     const totalRows = [...totals.entries()]
@@ -1953,7 +2126,7 @@ export default function ModelViewer() {
 <?mso-application progid="Excel.Sheet"?>
 <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
 <Styles><Style ss:ID="Default"><Alignment ss:Vertical="Center"/><Font ss:FontName="Aptos" ss:Size="10"/></Style><Style ss:ID="Header"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#155E75" ss:Pattern="Solid"/></Style></Styles>
-<Worksheet ss:Name="Bar Schedule"><Table><Column ss:Width="180"/><Column ss:Width="65"/><Column ss:Width="65"/><Column ss:Width="95"/><Column ss:Width="90"/><Column ss:Width="90"/><Column ss:Width="95"/>${header(["Bar Name", "Quantity", "Bar Number", "Average Length (ft)", "Minimum Length (ft)", "Maximum Length (ft)", "Total Length (ft)"])}${scheduleRows}</Table></Worksheet>
+<Worksheet ss:Name="Bar Schedule"><Table><Column ss:Width="180"/><Column ss:Width="75"/><Column ss:Width="65"/><Column ss:Width="65"/><Column ss:Width="95"/><Column ss:Width="90"/><Column ss:Width="90"/><Column ss:Width="95"/>${header(["Bar Name", "Tags", "Quantity", "Bar Number", "Average Length (ft)", "Minimum Length (ft)", "Maximum Length (ft)", "Total Length (ft)"])}${scheduleRows}</Table></Worksheet>
 <Worksheet ss:Name="Totals by Bar Number"><Table><Column ss:Width="100"/><Column ss:Width="140"/>${header(["Bar Number", "Total Length (ft)"])}${totalRows}</Table></Worksheet>
 </Workbook>`;
     downloadBlob(
@@ -2413,6 +2586,7 @@ export default function ModelViewer() {
     setAdvancedRebarOpen(false);
     setRebarSplayEnabled(false);
     setRebarSplayTargetPlaneId(null);
+    setRebarSplayTargetOffset(0);
     setRebarSplayScope("all");
     setRebarSplayLastCount(5);
     setRebarVariableLengthEnabled(false);
@@ -2765,13 +2939,27 @@ export default function ModelViewer() {
     const targetPlane = rebarPlanes.find(
       (plane) => plane.id === run.advanced?.splay?.targetPlaneId,
     );
+    const targetNormal = targetPlane
+      ? normalize(
+          reframeDirection(targetPlane.objectNormal, null, basis),
+        )
+      : null;
+    const targetBaseOrigin = targetPlane
+      ? reframePoint(targetPlane.objectOrigin, null, basis)
+      : null;
     return {
       sourceNormal: sourcePlane
         ? reframeDirection(sourcePlane.objectNormal, null, basis)
         : null,
-      targetNormal: targetPlane
-        ? reframeDirection(targetPlane.objectNormal, null, basis)
-        : null,
+      targetNormal,
+      targetOrigin:
+        targetBaseOrigin && targetNormal
+          ? addScaled(
+              targetBaseOrigin,
+              targetNormal,
+              run.advanced?.splay?.targetOffset ?? 0,
+            )
+          : null,
     };
   };
 
@@ -2779,12 +2967,7 @@ export default function ModelViewer() {
     if (!draftAdvancedRun) return [];
     const baseRun: RebarRun = {
       ...draftAdvancedRun,
-      advanced: draftAdvancedRun.advanced
-        ? {
-            ...draftAdvancedRun.advanced,
-            variableLength: undefined,
-          }
-        : undefined,
+      advanced: undefined,
     };
     const instances = generateRebarInstances(baseRun, {
       ...advancedNormalsForRun(baseRun),
@@ -2877,6 +3060,9 @@ export default function ModelViewer() {
     setRebarSplayTargetPlaneId(
       source.advanced?.splay?.targetPlaneId ?? null,
     );
+    setRebarSplayTargetOffset(
+      source.advanced?.splay?.targetOffset ?? 0,
+    );
     setRebarSplayScope(source.advanced?.splay?.scope ?? "all");
     setRebarSplayLastCount(source.advanced?.splay?.count ?? 5);
     setRebarVariableLengthEnabled(
@@ -2926,6 +3112,9 @@ export default function ModelViewer() {
     setRebarSplayEnabled(Boolean(run.advanced?.splay));
     setRebarSplayTargetPlaneId(
       run.advanced?.splay?.targetPlaneId ?? null,
+    );
+    setRebarSplayTargetOffset(
+      run.advanced?.splay?.targetOffset ?? 0,
     );
     setRebarSplayScope(run.advanced?.splay?.scope ?? "all");
     setRebarSplayLastCount(run.advanced?.splay?.count ?? 5);
@@ -3161,6 +3350,7 @@ export default function ModelViewer() {
                 rebarSplayEnabled && rebarSplayTargetPlaneId
                   ? {
                       targetPlaneId: rebarSplayTargetPlaneId,
+                      targetOffset: rebarSplayTargetOffset,
                       scope: rebarSplayScope,
                       count:
                         rebarSplayScope === "last"
@@ -3207,6 +3397,7 @@ export default function ModelViewer() {
     setAdvancedRebarOpen(false);
     setRebarSplayEnabled(false);
     setRebarSplayTargetPlaneId(null);
+    setRebarSplayTargetOffset(0);
     setRebarSplayScope("all");
     setRebarSplayLastCount(5);
     setRebarVariableLengthEnabled(false);
@@ -3219,7 +3410,7 @@ export default function ModelViewer() {
     );
   };
 
-  const finishLappedRebar = () => {
+  const prepareLappedRebarDetails = () => {
     const referenceRun = rebarReferenceRunId
       ? rebarRuns.find((run) => run.id === rebarReferenceRunId)
       : null;
@@ -3251,7 +3442,11 @@ export default function ModelViewer() {
       z: startPoint.z + direction.z * distance,
     };
     setRebarPathEnd(endpoint);
-    finishRebarRun(startPoint, endpoint);
+    setRebarPathPoints([startPoint, endpoint]);
+    setRebarPhase("spacing");
+    setStatus(
+      "Lapped path prepared. Review details and any Advanced options before finishing.",
+    );
   };
 
   const cancelRebarWorkflow = useCallback(() => {
@@ -3268,6 +3463,7 @@ export default function ModelViewer() {
     setAdvancedRebarOpen(false);
     setRebarSplayEnabled(false);
     setRebarSplayTargetPlaneId(null);
+    setRebarSplayTargetOffset(0);
     setRebarSplayScope("all");
     setRebarSplayLastCount(5);
     setRebarVariableLengthEnabled(false);
@@ -3761,7 +3957,7 @@ export default function ModelViewer() {
     >
       <button
         type="button"
-        title={`${run.positions.length} bars · #${run.barNumber ?? "5"} · ${run.spacingInches}" nominal${run.lappedFromRunId ? " · lapped" : ""}`}
+        title={`${run.positions.length} bars · #${run.barNumber ?? "5"} · ${run.spacingInches}" nominal${run.advanced?.variableLength ? " · Varying" : ""}${run.lappedFromRunId ? " · lapped" : ""}`}
         className={`bar-run-item ${
           selectedRebarRunIds.has(run.id) ? "selected" : ""
         }`}
@@ -5787,18 +5983,14 @@ export default function ModelViewer() {
                       className="button primary wide"
                       onClick={() => {
                         if (activeLappedWorkflow) {
-                          finishLappedRebar();
+                          prepareLappedRebarDetails();
                         } else {
                           setRebarPhase("path-end");
                         }
                       }}
                     >
                       {activeLappedWorkflow
-                        ? editingRebarRunId
-                          ? editEndSectionChanged || editDetailsChanged
-                            ? "Update Lapped Bar"
-                            : "Lapped Bar OK"
-                          : "Finish Lapped Bar"
+                        ? "Continue to Details"
                         : editingRebarRunId
                           ? editEndSectionChanged
                             ? "Update End Section"
@@ -5906,9 +6098,13 @@ export default function ModelViewer() {
                       <DraftNumberInput
                         min={0.01}
                         step={0.125}
+                        disabled={activeLappedWorkflow}
                         value={rebarSpacing}
                         onValueChange={setRebarSpacing}
                       />
+                      {activeLappedWorkflow && (
+                        <small>Inherited from the selected lapped bar.</small>
+                      )}
                     </label>
                     <div className="bar-number-field">
                       <span className="eyebrow">BAR NUMBER</span>
@@ -5992,8 +6188,8 @@ export default function ModelViewer() {
                             <span>
                               <strong>Splay to another plane</strong>
                               <small>
-                                Rotate successive bars from the drawing plane
-                                toward a selected project plane.
+                                Project every point of successive bars from the
+                                drawing plane toward a positioned project plane.
                               </small>
                             </span>
                           </label>
@@ -6003,11 +6199,12 @@ export default function ModelViewer() {
                                 Target plane
                                 <select
                                   value={rebarSplayTargetPlaneId ?? ""}
-                                  onChange={(event) =>
+                                  onChange={(event) => {
                                     setRebarSplayTargetPlaneId(
                                       event.target.value || null,
-                                    )
-                                  }
+                                    );
+                                    setRebarSplayTargetOffset(0);
+                                  }}
                                 >
                                   <option value="">Choose a plane</option>
                                   {rebarPlanes
@@ -6022,6 +6219,58 @@ export default function ModelViewer() {
                                     ))}
                                 </select>
                               </label>
+                              {activeSplayTargetPlane && (
+                                <label>
+                                  Target plane position (in)
+                                  <div className="splay-target-position">
+                                    <input
+                                      aria-label="Splay target plane position"
+                                      type="range"
+                                      min={
+                                        splayTargetPlaneBounds[0] *
+                                        inchesPerModelUnit
+                                      }
+                                      max={
+                                        splayTargetPlaneBounds[1] *
+                                        inchesPerModelUnit
+                                      }
+                                      step={0.25}
+                                      value={
+                                        rebarSplayTargetOffset *
+                                        inchesPerModelUnit
+                                      }
+                                      onChange={(event) =>
+                                        setRebarSplayTargetOffset(
+                                          Number(event.target.value) /
+                                            inchesPerModelUnit,
+                                        )
+                                      }
+                                    />
+                                    <DraftNumberInput
+                                      min={
+                                        splayTargetPlaneBounds[0] *
+                                        inchesPerModelUnit
+                                      }
+                                      max={
+                                        splayTargetPlaneBounds[1] *
+                                        inchesPerModelUnit
+                                      }
+                                      step={0.25}
+                                      value={Number(
+                                        (
+                                          rebarSplayTargetOffset *
+                                          inchesPerModelUnit
+                                        ).toFixed(3),
+                                      )}
+                                      onValueChange={(value) =>
+                                        setRebarSplayTargetOffset(
+                                          value / inchesPerModelUnit,
+                                        )
+                                      }
+                                    />
+                                  </div>
+                                </label>
+                              )}
                               <div className="advanced-scope-buttons">
                                 <button
                                   type="button"
@@ -6101,64 +6350,67 @@ export default function ModelViewer() {
                                   .map((anchor, index, anchors) => (
                                     <div
                                       key={anchor.id}
-                                      className={
+                                      className={`endpoint-anchor-row ${
+                                        index === 0
+                                          ? "start-anchor"
+                                          : index === anchors.length - 1
+                                            ? "end-anchor"
+                                            : "additional-anchor"
+                                      } ${
                                         advancedAnchorPickingId === anchor.id
                                           ? "picking"
                                           : ""
-                                      }
+                                      }`}
                                     >
-                                      <label>
-                                        <span>Run %</span>
-                                        <DraftNumberInput
-                                          min={0}
-                                          max={100}
-                                          step={1}
-                                          disabled={
-                                            index === 0 ||
-                                            index === anchors.length - 1
-                                          }
-                                          value={Number(
-                                            (anchor.fraction * 100).toFixed(2),
-                                          )}
-                                          onValueChange={(value) =>
-                                            setRebarEndpointAnchors((current) =>
-                                              current
-                                                .map((candidate) =>
-                                                  candidate.id === anchor.id
-                                                    ? {
-                                                        ...candidate,
-                                                        fraction: Math.max(
-                                                          0,
-                                                          Math.min(
-                                                            1,
-                                                            value / 100,
-                                                          ),
-                                                        ),
-                                                      }
-                                                    : candidate,
-                                                )
-                                                .sort(
-                                                  (a, b) =>
-                                                    a.fraction - b.fraction,
-                                                ),
-                                            )
-                                          }
-                                        />
-                                      </label>
-                                      <span className="endpoint-coordinate">
-                                        {[
-                                          anchor.point.x,
-                                          anchor.point.y,
-                                          anchor.point.z,
-                                        ]
-                                          .map((value) =>
-                                            formatCoordinate(
-                                              value * inchesPerModelUnit,
-                                            ),
-                                          )
-                                          .join(", ")}
-                                        &quot;
-                                      </span>
+                                      {index === 0 ||
+                                      index === anchors.length - 1 ? (
+                                        <strong className="anchor-role-label">
+                                          <i aria-hidden="true" />
+                                          {index === 0 ? "Start" : "End"}
+                                        </strong>
+                                      ) : (
+                                        <label
+                                          title="Run % locates this additional endpoint vertex between the first and last bars in the run."
+                                        >
+                                          <span>Run %</span>
+                                          <DraftNumberInput
+                                            min={0.1}
+                                            max={99.9}
+                                            step={1}
+                                            value={Number(
+                                              (anchor.fraction * 100).toFixed(
+                                                2,
+                                              ),
+                                            )}
+                                            onValueChange={(value) =>
+                                              setRebarEndpointAnchors(
+                                                (current) =>
+                                                  current
+                                                    .map((candidate) =>
+                                                      candidate.id === anchor.id
+                                                        ? {
+                                                            ...candidate,
+                                                            fraction:
+                                                              Math.max(
+                                                                0.001,
+                                                                Math.min(
+                                                                  0.999,
+                                                                  value / 100,
+                                                                ),
+                                                              ),
+                                                          }
+                                                        : candidate,
+                                                    )
+                                                    .sort(
+                                                      (a, b) =>
+                                                        a.fraction -
+                                                        b.fraction,
+                                                    ),
+                                              )
+                                            }
+                                          />
+                                        </label>
+                                      )}
                                       <button
                                         type="button"
                                         onClick={() => {
@@ -6166,7 +6418,13 @@ export default function ModelViewer() {
                                             anchor.id,
                                           );
                                           setStatus(
-                                            `Pick the terminal point for the bar at ${(anchor.fraction * 100).toFixed(0)}% of the run.`,
+                                            `Pick the ${
+                                              index === 0
+                                                ? "Start"
+                                                : index === anchors.length - 1
+                                                  ? "End"
+                                                  : `${(anchor.fraction * 100).toFixed(0)}%`
+                                            } terminal point. Inner perimeter snaps are active.`,
                                           );
                                         }}
                                       >
@@ -6207,7 +6465,7 @@ export default function ModelViewer() {
                                   onClick={addVariableLengthAnchor}
                                   disabled={rebarEndpointAnchors.length < 2}
                                 >
-                                  Add Anchor
+                                  Additional Vertex
                                 </button>
                                 <button
                                   type="button"
@@ -6538,15 +6796,20 @@ export default function ModelViewer() {
                 : visibleRebarRuns
           }
           rebarPlanes={rebarPlanes}
+          rebarAdvancedAnchors={displayAdvancedAnchors}
           selectedRebarRunIds={selectedRebarRunIds}
           showRebarLabels={false}
           rebarGuideLines={
-            pendingRebarLine || rebarPhase === "path-end"
+            pendingRebarLine ||
+            rebarPhase === "path-end" ||
+            Boolean(advancedAnchorPickingId)
               ? rebarGuideLines
               : []
           }
           rebarInnerGuideLines={
-            pendingRebarLine || rebarPhase === "path-end"
+            pendingRebarLine ||
+            rebarPhase === "path-end" ||
+            Boolean(advancedAnchorPickingId)
               ? rebarInnerGuideLines
               : []
           }
@@ -6557,7 +6820,9 @@ export default function ModelViewer() {
           pendingRebarLine={pendingRebarLine}
           draftRebarLines={draftAdvancedRun ? [] : rebarLines}
           rebarSnapLines={
-            pendingRebarLine
+            advancedAnchorPickingId
+              ? [...rebarGuideLines, ...rebarInnerGuideLines]
+              : pendingRebarLine
               ? [...rebarGuideLines, ...rebarInnerGuideLines]
               : rebarPhase === "path-start"
                 ? rebarLines
