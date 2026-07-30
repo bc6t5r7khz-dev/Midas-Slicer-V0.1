@@ -3549,9 +3549,43 @@ input[type="range"]::-moz-range-thumb {
   gap: 7px;
 }
 
+.advanced-rebar-panel > section:first-child {
+  display: none;
+}
+
 .advanced-rebar-panel > section + section {
-  padding-top: 9px;
-  border-top: 1px solid #c8cccd;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.splay-end-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.splay-end-panel > label {
+  display: grid;
+  gap: 4px;
+}
+
+.splay-end-panel input[type="range"] {
+  width: 100%;
+}
+
+.end-section-choice-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 7px;
+}
+
+.button.dark-confirm {
+  border-color: #111;
+  background: #111;
+  color: #fff;
+}
+
+.button.dark-confirm:hover {
+  background: #303030;
 }
 
 .advanced-feature-toggle {

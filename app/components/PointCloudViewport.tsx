@@ -2368,10 +2368,29 @@ export default function PointCloudViewport({
                 targetNormal.z * (run.advanced?.splay?.targetOffset ?? 0),
             }
           : null;
+      const sourceNormal = sourcePlane
+        ? reframeDirection(sourcePlane.objectNormal, null, basis)
+        : null;
+      const sourceBaseOrigin = sourcePlane
+        ? reframePoint(sourcePlane.objectOrigin, null, basis)
+        : null;
+      const sourceOrigin =
+        sourceBaseOrigin && sourceNormal
+          ? {
+              x:
+                sourceBaseOrigin.x +
+                sourceNormal.x * (run.startOffset ?? run.start),
+              y:
+                sourceBaseOrigin.y +
+                sourceNormal.y * (run.startOffset ?? run.start),
+              z:
+                sourceBaseOrigin.z +
+                sourceNormal.z * (run.startOffset ?? run.start),
+            }
+          : null;
       const instances = generateRebarInstances(run, {
-        sourceNormal: sourcePlane
-          ? reframeDirection(sourcePlane.objectNormal, null, basis)
-          : null,
+        sourceNormal,
+        sourceOrigin,
         targetNormal,
         targetOrigin,
         lapOffsetModelUnits:

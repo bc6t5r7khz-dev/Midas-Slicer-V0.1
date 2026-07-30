@@ -102,7 +102,8 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /delete-empty-group/);
   assert.match(viewer, /Start Section OK/);
   assert.match(viewer, /Rebar Shape OK/);
-  assert.match(viewer, /End Section OK/);
+  assert.match(viewer, /Choose Other Plane/);
+  assert.match(viewer, /Splay target/);
   assert.match(viewer, /Bar OK/);
   assert.match(viewer, /slicing-list-title">Planes</);
   assert.match(viewer, /setSelectedRebarRunIds\(new Set\(\)\)/);

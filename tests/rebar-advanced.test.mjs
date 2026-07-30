@@ -20,7 +20,11 @@ vm.runInNewContext(compiled, {
   exports: module.exports,
   require: () => ({}),
 });
-const { generateRebarInstances, rebarInstanceLength } = module.exports;
+const {
+  generateRebarInstances,
+  rebarInstanceLength,
+  splayArcLengthAtMidpoint,
+} = module.exports;
 
 const baseRun = {
   id: "run",
@@ -39,7 +43,7 @@ const baseRun = {
   planeId: "source",
 };
 
-test("splay projects every point of the last X bars onto the target plane", () => {
+test("splay rotates the last X bars onto the target plane around the plane intersection", () => {
   const run = {
     ...baseRun,
     advanced: {
@@ -48,6 +52,7 @@ test("splay projects every point of the last X bars onto the target plane", () =
   };
   const instances = generateRebarInstances(run, {
     sourceNormal: { x: 0, y: 0, z: 1 },
+    sourceOrigin: { x: 0, y: 0, z: 0 },
     targetNormal: { x: 1, y: 0, z: 1 },
     targetOrigin: { x: 0, y: 0, z: 7 },
   });
@@ -58,6 +63,20 @@ test("splay projects every point of the last X bars onto the target plane", () =
     assert.ok(Math.abs(point.x + point.z - 7) < 1e-9);
     assert.ok(Math.abs(point.y - 10) < 1e-9);
   }
+});
+
+test("splay spacing is measured on the circular arc at the bar midpoint", () => {
+  const layout = splayArcLengthAtMidpoint(
+    baseRun.lines,
+    { x: 0, y: 0, z: 1 },
+    { x: 0, y: 0, z: 0 },
+    { x: 1, y: 0, z: 1 },
+    { x: 0, y: 0, z: 7 },
+  );
+  assert.ok(layout);
+  assert.ok(Math.abs(layout.angle - Math.PI / 4) < 1e-9);
+  assert.ok(Math.abs(layout.radius - 6.5) < 1e-9);
+  assert.ok(Math.abs(layout.arcLength - (6.5 * Math.PI) / 4) < 1e-9);
 });
 
 test("endpoint anchors interpolate bar length along a run", () => {
