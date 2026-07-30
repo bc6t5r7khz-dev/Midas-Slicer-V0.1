@@ -3278,6 +3278,124 @@ input[type="range"]::-moz-range-thumb {
   min-width: 0;
 }
 
+.bar-mark-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 7px;
+}
+
+.bar-mark-input {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 31px;
+  align-items: center;
+  border: 1px solid #111;
+  background: #fff;
+}
+
+.bar-mark-input b {
+  padding-left: 7px;
+  color: #8a8f91;
+  font: 700 10px/1 var(--mono);
+}
+
+.rebar-step .bar-mark-input input {
+  width: 100%;
+  min-height: 29px;
+  padding: 6px 7px 6px 2px;
+  border: 0;
+  background: transparent;
+  color: #111;
+}
+
+.bar-mark-fields > label > input {
+  min-height: 31px;
+  background: #fff;
+  color: #111;
+}
+
+.compact-setting-field {
+  display: grid;
+  gap: 5px;
+}
+
+.compact-choice-row {
+  display: grid;
+  gap: 4px;
+}
+
+.spacing-choice-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.bar-number-buttons.compact-choice-row {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.compact-choice-row button,
+.compact-choice-row > input,
+.compact-other-number {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 31px;
+  min-height: 31px;
+  padding: 0 3px;
+  border: 1px solid #111;
+  border-radius: 0;
+  background: #fff;
+  color: #111;
+  font: 700 9px/1 var(--mono);
+}
+
+.compact-choice-row button {
+  cursor: pointer;
+}
+
+.compact-choice-row button:hover,
+.compact-choice-row button.active,
+.compact-choice-row > input.active {
+  background: #111;
+  color: #fff;
+}
+
+.compact-choice-row button:disabled,
+.compact-choice-row > input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.compact-other-number {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.compact-other-number b {
+  padding-left: 3px;
+  color: #777;
+}
+
+.rebar-step .compact-other-number input {
+  width: 100%;
+  min-width: 0;
+  height: 29px;
+  padding: 2px 1px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.compact-other-number:has(input.custom-active) {
+  background: #111;
+  color: #fff;
+}
+
+.compact-other-number:has(input.custom-active) b {
+  color: #bbb;
+}
+
 .rebar-content .bar-run-delete {
   display: block;
   width: auto;

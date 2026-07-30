@@ -381,6 +381,46 @@ const leastUsedRebarColor = (runs: RebarRun[]) => {
   return candidates[Math.floor(Math.random() * candidates.length)] ?? REBAR_COLORS[0];
 };
 
+const structuredBarMark = (run: RebarRun) => {
+  if (run.series !== undefined || run.suffix !== undefined) {
+    return {
+      series: run.series ?? "101",
+      suffix: run.suffix ?? "",
+    };
+  }
+  const barNumber = run.barNumber ?? "5";
+  const prefix = `#${barNumber}`;
+  const remainder = run.name.startsWith(prefix)
+    ? run.name.slice(prefix.length)
+    : run.name;
+  const match = remainder.match(/^(\d+)(.*)$/);
+  return {
+    series: match?.[1] ?? "101",
+    suffix: match?.[2] ?? "E",
+  };
+};
+
+const nextBarMark = (runs: RebarRun[]) => {
+  const parsed = runs.flatMap((run) => {
+    if (run.series !== undefined || run.suffix !== undefined) {
+      return [structuredBarMark(run)];
+    }
+    const prefix = `#${run.barNumber ?? "5"}`;
+    return run.name.startsWith(prefix) &&
+      /^\d+/.test(run.name.slice(prefix.length))
+      ? [structuredBarMark(run)]
+      : [];
+  });
+  const highest = parsed.reduce((current, mark) => {
+    const value = Number.parseInt(mark.series, 10);
+    return Number.isFinite(value) ? Math.max(current, value) : current;
+  }, 100);
+  return {
+    series: String(highest + 1),
+    suffix: parsed[parsed.length - 1]?.suffix ?? "E",
+  };
+};
+
 const migrateRebarProject = (
   runs: RebarRun[],
   savedPlanes: RebarPlane[] | undefined,
@@ -619,8 +659,9 @@ export default function ModelViewer() {
     useState<string | null>(null);
   const [editingRebarRunId, setEditingRebarRunId] =
     useState<string | null>(null);
-  const [rebarName, setRebarName] = useState("Bar Run 1");
   const [rebarBarNumber, setRebarBarNumber] = useState("5");
+  const [rebarSeries, setRebarSeries] = useState("101");
+  const [rebarSuffix, setRebarSuffix] = useState("E");
   const [rebarAxis, setRebarAxis] = useState<Axis>("x");
   const [rebarStart, setRebarStart] = useState(0);
   const [rebarEnd, setRebarEnd] = useState(0);
@@ -628,6 +669,7 @@ export default function ModelViewer() {
   const [pendingRebarLine, setPendingRebarLine] =
     useState<RebarLine | null>(null);
   const [rebarSpacing, setRebarSpacing] = useState(12);
+  const [customSpacingDraft, setCustomSpacingDraft] = useState("");
   const [rebarPathStart, setRebarPathStart] = useState<Vec3 | null>(null);
   const [rebarPathEnd, setRebarPathEnd] = useState<Vec3 | null>(null);
   const [rebarPathPoints, setRebarPathPoints] = useState<Vec3[]>([]);
@@ -662,6 +704,7 @@ export default function ModelViewer() {
   const [openHeaderMenu, setOpenHeaderMenu] = useState<
     "file" | "parameters" | "view" | null
   >(null);
+  const rebarName = `#${rebarBarNumber || "5"}${rebarSeries}${rebarSuffix}`;
 
   useEffect(() => {
     const timer = window.setTimeout(() => setRenderSlice(slice), 55);
@@ -1099,7 +1142,11 @@ export default function ModelViewer() {
             ]
           : [];
       }
-      if (activeTab === "rebar" && activeSlicePin) {
+      if (
+        activeTab === "rebar" &&
+        rebarPhase === "idle" &&
+        activeSlicePin
+      ) {
         const plane = rebarPlanes.find(
           (candidate) => candidate.id === activeSlicePin.planeId,
         );
@@ -1118,7 +1165,11 @@ export default function ModelViewer() {
             ]
           : [];
       }
-      if (activeTab === "rebar" && previewedRebarPlaneId) {
+      if (
+        activeTab === "rebar" &&
+        rebarPhase === "idle" &&
+        previewedRebarPlaneId
+      ) {
         const plane = rebarPlanes.find(
           (candidate) => candidate.id === previewedRebarPlaneId,
         );
@@ -2688,6 +2739,7 @@ export default function ModelViewer() {
   };
 
   const beginCreateRebar = () => {
+    const nextMark = nextBarMark(rebarRuns);
     setRebarWorkflowKind("create");
     setRebarReferenceRunId(null);
     setEditingRebarRunId(null);
@@ -2708,6 +2760,10 @@ export default function ModelViewer() {
     setRebarEndpointAnchors([]);
     setAdvancedAnchorPickingId(null);
     setRebarBarNumber("5");
+    setRebarSeries(nextMark.series);
+    setRebarSuffix(nextMark.suffix);
+    setRebarSpacing(12);
+    setCustomSpacingDraft("");
     if (activeRebarPlaneId) {
       chooseRebarPlane(activeRebarPlaneId);
       setStatus("Selected plane retained. Choose the start section.");
@@ -3191,7 +3247,14 @@ export default function ModelViewer() {
     setRebarStart(source.startOffset ?? source.start);
     setRebarEnd(source.endOffset ?? source.end);
     setRebarSpacing(source.spacingInches);
-    setRebarName(`${source.name} Lap`);
+    setCustomSpacingDraft(
+      [12, 9, 6].includes(source.spacingInches)
+        ? ""
+        : String(source.spacingInches),
+    );
+    const nextMark = nextBarMark(rebarRuns);
+    setRebarSeries(nextMark.series);
+    setRebarSuffix(nextMark.suffix);
     setRebarBarNumber(source.barNumber ?? "5");
     setRebarLines([]);
     setPendingRebarLine(null);
@@ -3228,6 +3291,7 @@ export default function ModelViewer() {
   };
 
   const beginEditRebar = (run: RebarRun) => {
+    const mark = structuredBarMark(run);
     setRebarWorkflowKind("edit");
     setRebarReferenceRunId(run.lappedFromRunId ?? null);
     setEditingRebarRunId(run.id);
@@ -3237,7 +3301,13 @@ export default function ModelViewer() {
     setRebarStart(run.startOffset ?? run.start);
     setRebarEnd(run.endOffset ?? run.end);
     setRebarSpacing(run.spacingInches);
-    setRebarName(run.name);
+    setCustomSpacingDraft(
+      [12, 9, 6].includes(run.spacingInches)
+        ? ""
+        : String(run.spacingInches),
+    );
+    setRebarSeries(mark.series);
+    setRebarSuffix(mark.suffix);
     setRebarBarNumber(run.barNumber ?? "5");
     setRebarLines([]);
     setPendingRebarLine(
@@ -3466,9 +3536,11 @@ export default function ModelViewer() {
     );
     const run: RebarRun = {
       id: editingRun?.id ?? `rebar-${crypto.randomUUID()}`,
-      name: rebarName.trim() || `Bar Run ${rebarRuns.length + 1}`,
+      name: rebarName,
       color: editingRun?.color ?? leastUsedRebarColor(rebarRuns),
       barNumber: rebarBarNumber.trim().replace(/^#/, "") || "5",
+      series: rebarSeries,
+      suffix: rebarSuffix,
       groupId: editingRun?.groupId,
       planeId: activeRebarPlaneId ?? undefined,
       startOffset: rebarStart,
@@ -3562,7 +3634,12 @@ export default function ModelViewer() {
     setRebarVariableLengthEnabled(false);
     setRebarEndpointAnchors([]);
     setAdvancedAnchorPickingId(null);
-    setRebarName(`Bar Run ${rebarRuns.length + (editingRun ? 1 : 2)}`);
+    if (!editingRun) {
+      const numericSeries = Number.parseInt(rebarSeries, 10);
+      if (Number.isFinite(numericSeries)) {
+        setRebarSeries(String(numericSeries + 1));
+      }
+    }
     setRebarBarNumber("5");
     setStatus(
       `${run.name} ${editingRun ? "updated" : "created"} with ${run.positions.length} bars.`,
@@ -6423,29 +6500,83 @@ export default function ModelViewer() {
                 {rebarPhase === "spacing" && (
                   <section className="rebar-step">
                     <span className="eyebrow">SPACING</span>
-                    <label>
-                      Run name
-                      <input
-                        value={rebarName}
-                        onChange={(event) => setRebarName(event.target.value)}
-                      />
-                    </label>
-                    <label>
-                      Bar spacing (in)
-                      <DraftNumberInput
-                        min={0.01}
-                        step={0.125}
-                        disabled={activeLappedWorkflow}
-                        value={rebarSpacing}
-                        onValueChange={setRebarSpacing}
-                      />
+                    <div className="bar-mark-fields">
+                      <label>
+                        Series
+                        <span className="bar-mark-input">
+                          <b>#{rebarBarNumber || "5"}</b>
+                          <input
+                            aria-label="Bar mark series"
+                            inputMode="numeric"
+                            value={rebarSeries}
+                            onChange={(event) =>
+                              setRebarSeries(
+                                event.target.value.replace(/\D/g, ""),
+                              )
+                            }
+                          />
+                        </span>
+                      </label>
+                      <label>
+                        Suffix
+                        <input
+                          aria-label="Bar mark suffix"
+                          value={rebarSuffix}
+                          onChange={(event) =>
+                            setRebarSuffix(event.target.value)
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="compact-setting-field">
+                      <span className="eyebrow">BAR SPACING</span>
+                      <div className="compact-choice-row spacing-choice-row">
+                        {[12, 9, 6].map((spacing) => (
+                          <button
+                            type="button"
+                            key={spacing}
+                            disabled={activeLappedWorkflow}
+                            className={
+                              customSpacingDraft === "" &&
+                              nearlyEqual(rebarSpacing, spacing)
+                                ? "active"
+                                : ""
+                            }
+                            onClick={() => {
+                              setRebarSpacing(spacing);
+                              setCustomSpacingDraft("");
+                            }}
+                          >
+                            {spacing}&quot;
+                          </button>
+                        ))}
+                        <input
+                          aria-label="Other bar spacing in inches"
+                          inputMode="decimal"
+                          disabled={activeLappedWorkflow}
+                          className={customSpacingDraft ? "active" : ""}
+                          value={customSpacingDraft}
+                          placeholder="Other"
+                          onChange={(event) => {
+                            const draft = event.target.value.replace(
+                              /[^0-9.]/g,
+                              "",
+                            );
+                            setCustomSpacingDraft(draft);
+                            const value = Number(draft);
+                            if (Number.isFinite(value) && value > 0) {
+                              setRebarSpacing(value);
+                            }
+                          }}
+                        />
+                      </div>
                       {activeLappedWorkflow && (
                         <small>Inherited from the selected lapped bar.</small>
                       )}
-                    </label>
+                    </div>
                     <div className="bar-number-field">
                       <span className="eyebrow">BAR NUMBER</span>
-                      <div className="bar-number-buttons">
+                      <div className="compact-choice-row bar-number-buttons">
                         {["5", "6", "7", "8", "9", "10"].map((number) => (
                           <button
                             type="button"
@@ -6456,10 +6587,8 @@ export default function ModelViewer() {
                             #{number}
                           </button>
                         ))}
-                      </div>
-                      <label className="custom-bar-number">
-                        <span>Other</span>
-                        <b>#</b>
+                        <label className="compact-other-number">
+                          <b>#</b>
                         <input
                           aria-label="Other bar number"
                           className={
@@ -6481,8 +6610,10 @@ export default function ModelViewer() {
                               event.target.value.replace(/[^0-9A-Za-z.-]/g, ""),
                             )
                           }
+                          placeholder="Other"
                         />
-                      </label>
+                        </label>
+                      </div>
                     </div>
                     <small>
                       Bars follow the selected anchor path and finish exactly

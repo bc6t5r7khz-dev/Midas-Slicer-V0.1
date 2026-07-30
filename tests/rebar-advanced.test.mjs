@@ -111,6 +111,30 @@ test("splay anchors follow every segment of a multipoint path", () => {
   );
 });
 
+test("opposite target normal uses the equivalent short fan angle", () => {
+  const run = {
+    ...baseRun,
+    pathPoints: [
+      { x: 0, y: 0, z: 0 },
+      { x: 6, y: 8, z: 0 },
+    ],
+    advanced: {
+      splay: { targetPlaneId: "target", scope: "all" },
+    },
+  };
+  const instances = generateRebarInstances(run, {
+    sourceNormal: { x: 0, y: 0, z: 1 },
+    sourceOrigin: { x: 0, y: 0, z: 0 },
+    targetNormal: { x: -1, y: 0, z: -1 },
+    targetOrigin: { x: 0, y: 0, z: 6 },
+  });
+  const anchor = instances.at(-1)[0].points[0];
+  const endpoint = instances.at(-1)[0].points[1];
+  assert.ok(endpoint.x > anchor.x);
+  assert.ok(endpoint.z < anchor.z);
+  assert.ok(Math.abs(endpoint.x + endpoint.z - 6) < 1e-9);
+});
+
 test("endpoint anchors interpolate bar length along a run", () => {
   const run = {
     ...baseRun,

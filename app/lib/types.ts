@@ -138,6 +138,8 @@ export type RebarRun = {
   name: string;
   color?: string;
   barNumber?: string;
+  series?: string;
+  suffix?: string;
   planeId?: string | null;
   groupId?: string;
   startOffset?: number;

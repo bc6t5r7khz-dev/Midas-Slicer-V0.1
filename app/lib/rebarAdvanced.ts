@@ -72,7 +72,13 @@ const planeIntersection = (
   secondPoint: Vec3,
 ) => {
   const firstNormal = normalize(firstNormalInput);
-  const secondNormal = normalize(secondNormalInput);
+  let secondNormal = normalize(secondNormalInput);
+  // A plane is unchanged when its normal is reversed. Always use the
+  // equivalent target normal nearest the source normal so a harmless node
+  // ordering difference cannot turn a small fan into a near-180° rotation.
+  if (dot(firstNormal, secondNormal) < 0) {
+    secondNormal = scale(secondNormal, -1);
+  }
   const directionRaw = cross(firstNormal, secondNormal);
   const denominator = dot(directionRaw, directionRaw);
   if (denominator <= 1e-12) return null;

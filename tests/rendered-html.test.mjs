@@ -104,6 +104,8 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /Rebar Shape OK/);
   assert.match(viewer, /Choose Other Plane/);
   assert.match(viewer, /Splay target/);
+  assert.match(viewer, /Bar mark series/);
+  assert.match(viewer, /BAR SPACING/);
   assert.match(viewer, /Bar OK/);
   assert.match(viewer, /slicing-list-title">Planes</);
   assert.match(viewer, /setSelectedRebarRunIds\(new Set\(\)\)/);
@@ -123,6 +125,8 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(types, /export type SlicePin/);
   assert.match(types, /pathPoints\?: Vec3\[\]/);
   assert.match(types, /barNumber\?: string/);
+  assert.match(types, /series\?: string/);
+  assert.match(types, /suffix\?: string/);
   assert.match(storage, /rebarPlanes\?: RebarPlane\[\]/);
   assert.match(storage, /slicePins\?: SlicePin\[\]/);
 });
