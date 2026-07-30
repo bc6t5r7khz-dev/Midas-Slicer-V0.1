@@ -6,7 +6,12 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
-import { toLocal, transformPlane } from "../lib/coordinateSystem";
+import {
+  reframeDirection,
+  toLocal,
+  transformPlane,
+} from "../lib/coordinateSystem";
+import { generateRebarInstances } from "../lib/rebarAdvanced";
 import type {
   Bounds,
   CameraViewpoint,
@@ -14,6 +19,7 @@ import type {
   ElementSurface,
   ModelElement,
   RebarLine,
+  RebarPlane,
   RebarRun,
   ModelNode,
   SliceRanges,
@@ -72,6 +78,7 @@ type Props = {
   onViewpointCaptured: (pinId: string, viewpoint: CameraViewpoint) => void;
   showRebarPlaneNodes: boolean;
   rebarRuns: RebarRun[];
+  rebarPlanes: RebarPlane[];
   selectedRebarRunIds: ReadonlySet<string>;
   showRebarLabels: boolean;
   rebarGuideLines: RebarLine[];
@@ -572,31 +579,6 @@ function fitCamera(
   controls.saveState();
 }
 
-function pointAlongPolyline(points: Vec3[], distance: number): Vec3 {
-  if (!points.length) return { x: 0, y: 0, z: 0 };
-  if (points.length === 1 || distance <= 0) return points[0];
-  let remaining = distance;
-  for (let index = 1; index < points.length; index += 1) {
-    const start = points[index - 1];
-    const end = points[index];
-    const length = Math.hypot(
-      end.x - start.x,
-      end.y - start.y,
-      end.z - start.z,
-    );
-    if (remaining <= length || index === points.length - 1) {
-      const amount = length > 1e-12 ? Math.min(remaining / length, 1) : 0;
-      return {
-        x: start.x + (end.x - start.x) * amount,
-        y: start.y + (end.y - start.y) * amount,
-        z: start.z + (end.z - start.z) * amount,
-      };
-    }
-    remaining -= length;
-  }
-  return points[points.length - 1];
-}
-
 export default function PointCloudViewport({
   nodes,
   allNodes,
@@ -631,6 +613,7 @@ export default function PointCloudViewport({
   onViewpointCaptured,
   showRebarPlaneNodes,
   rebarRuns,
+  rebarPlanes,
   selectedRebarRunIds,
   showRebarLabels,
   rebarGuideLines,
@@ -2351,85 +2334,43 @@ export default function PointCloudViewport({
       const targetJoints = runSelected
         ? selectedColorBuffers.joints
         : colorBuffers.joints;
-      const lapOffset =
-        inchesPerModelUnit && run.lapOffsetInches
-          ? run.lapOffsetInches / inchesPerModelUnit
-          : 0;
-      for (const position of run.positions) {
-        const pathTranslation =
-          run.pathPoints && run.pathPoints.length >= 2
-            ? (() => {
-                const pathPoint = pointAlongPolyline(
-                  run.pathPoints!,
-                  position + lapOffset,
-                );
-                const origin = run.pathPoints![0];
-                return {
-                  x: pathPoint.x - origin.x,
-                  y: pathPoint.y - origin.y,
-                  z: pathPoint.z - origin.z,
-                };
-              })()
-            : null;
-        for (const line of run.lines) {
-          const translated = line.points.map((point) => {
-            if (pathTranslation) {
-              return {
-                x: point.x + pathTranslation.x,
-                y: point.y + pathTranslation.y,
-                z: point.z + pathTranslation.z,
-              };
-            }
-            if (
-              (run.distributionMode === "edge" ||
-                run.distributionMode === "path") &&
-              run.distributionVector
-            ) {
-              return {
-                x:
-                  point.x +
-                  run.distributionVector.x * (position + lapOffset),
-                y:
-                  point.y +
-                  run.distributionVector.y * (position + lapOffset),
-                z:
-                  point.z +
-                  run.distributionVector.z * (position + lapOffset),
-              };
-            }
-            return {
-              ...point,
-              [run.axis]: position + lapOffset,
-            };
-          });
-          targetJoints.push(...translated);
-          for (let index = 0; index < translated.length - 1; index += 1) {
-            targetSegments.push([translated[index], translated[index + 1]]);
+      const sourcePlane = rebarPlanes.find(
+        (plane) => plane.id === run.planeId,
+      );
+      const targetPlane = rebarPlanes.find(
+        (plane) => plane.id === run.advanced?.splay?.targetPlaneId,
+      );
+      const instances = generateRebarInstances(run, {
+        sourceNormal: sourcePlane
+          ? reframeDirection(sourcePlane.objectNormal, null, basis)
+          : null,
+        targetNormal: targetPlane
+          ? reframeDirection(targetPlane.objectNormal, null, basis)
+          : null,
+        lapOffsetModelUnits:
+          inchesPerModelUnit && run.lapOffsetInches
+            ? run.lapOffsetInches / inchesPerModelUnit
+            : 0,
+      });
+      for (const instance of instances) {
+        for (const line of instance) {
+          targetJoints.push(...line.points);
+          for (let index = 0; index < line.points.length - 1; index += 1) {
+            targetSegments.push([line.points[index], line.points[index + 1]]);
           }
-          if (line.closed && translated.length > 2) {
+          if (line.closed && line.points.length > 2) {
             targetSegments.push([
-              translated[translated.length - 1],
-              translated[0],
+              line.points[line.points.length - 1],
+              line.points[0],
             ]);
           }
         }
       }
-      const firstPoint = run.lines[0]?.points[0];
+      const firstPoint = instances[0]?.[0]?.points[0];
       if (showRebarLabels && firstPoint) {
         const label = createTextSprite(run.name);
         if (label) {
-          const labelPoint =
-            run.distributionMode === "path" && run.distributionVector
-              ? {
-                  x: firstPoint.x + run.distributionVector.x * lapOffset,
-                  y: firstPoint.y + run.distributionVector.y * lapOffset,
-                  z: firstPoint.z + run.distributionVector.z * lapOffset,
-                }
-              : {
-                  ...firstPoint,
-                  [run.axis]: run.start + lapOffset,
-                };
-          const position = toThree(labelPoint, displayOffset);
+          const position = toThree(firstPoint, displayOffset);
           label.position.copy(position);
           state.rebarGroup.add(label);
         }
@@ -2680,6 +2621,7 @@ export default function PointCloudViewport({
     rebarPathStart,
     rebarDrawingPlane,
     rebarPlanePreviews,
+    rebarPlanes,
     rebarRuns,
     rebarSection,
     selectedRebarRunIds,

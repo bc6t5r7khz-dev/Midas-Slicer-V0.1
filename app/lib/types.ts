@@ -86,6 +86,29 @@ export type RebarGroup = {
   visible: boolean;
 };
 
+export type RebarEndpointAnchor = {
+  id: string;
+  /** Normalized location along the run: 0 = first bar, 1 = last bar. */
+  fraction: number;
+  /** Current-coordinate terminal point for this location. */
+  point: Vec3;
+  /** Stable model-coordinate terminal point, retained across axis changes. */
+  objectPoint?: Vec3;
+};
+
+export type RebarAdvancedDefinition = {
+  splay?: {
+    targetPlaneId: string;
+    scope: "all" | "last";
+    /** Used when scope is "last". */
+    count?: number;
+  };
+  variableLength?: {
+    /** Ordered controls for the terminal vertex of each generated bar. */
+    endpointAnchors: RebarEndpointAnchor[];
+  };
+};
+
 export type CameraViewpoint = {
   position: Vec3;
   target: Vec3;
@@ -135,6 +158,7 @@ export type RebarRun = {
   lapOffsetInches?: number;
   positions: number[];
   lines: RebarLine[];
+  advanced?: RebarAdvancedDefinition;
 };
 
 export type WorkflowTab = "setup" | "slicing" | "rebar";
