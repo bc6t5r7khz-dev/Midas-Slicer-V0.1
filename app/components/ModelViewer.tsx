@@ -25,6 +25,10 @@ import {
   generateRebarInstances,
   rebarInstanceLength,
 } from "../lib/rebarAdvanced";
+import {
+  applyStandardBendsToInstance,
+  CRSI_REBAR_BEND_STANDARDS,
+} from "../lib/rebarStandards";
 import { createSampleMct } from "../lib/sampleModel";
 import { smartFaceFromSeed } from "../lib/smartSelect";
 import {
@@ -2210,10 +2214,14 @@ export default function ModelViewer() {
         lapOffsetModelUnits: run.lapOffsetInches
           ? run.lapOffsetInches / inchesPerModelUnit
           : 0,
-      }).map(
-        (instance) =>
-          (rebarInstanceLength(instance) * inchesPerModelUnit) / 12,
-      );
+      }).map((instance) => {
+        const bentInstance = applyStandardBendsToInstance(
+          instance,
+          run.barNumber,
+          inchesPerModelUnit,
+        );
+        return (rebarInstanceLength(bentInstance) * inchesPerModelUnit) / 12;
+      });
       const totalFeet = lengthsFeet.reduce(
         (total, lengthFeet) => total + lengthFeet,
         0,
@@ -4548,6 +4556,46 @@ export default function ModelViewer() {
                         }
                       />
                     </label>
+                    <section className="bend-standards">
+                      <div className="bend-standards-heading">
+                        <strong>CRSI Standard Bar Bends</strong>
+                        <span>Minimum finished inside diameter</span>
+                      </div>
+                      <div className="bend-standard-row bend-standard-header">
+                        <span>Bar</span>
+                        <span>Ø</span>
+                        <span>Inside Ø</span>
+                        <span>CL radius</span>
+                      </div>
+                      <div className="bend-standards-table">
+                        {CRSI_REBAR_BEND_STANDARDS.map((standard) => (
+                          <div
+                            className="bend-standard-row"
+                            key={standard.barNumber}
+                          >
+                            <strong>#{standard.barNumber}</strong>
+                            <span>{standard.diameterInches.toFixed(3)}″</span>
+                            <span>
+                              {standard.minimumInsideBendDiameterInches.toFixed(
+                                3,
+                              )}
+                              ″
+                            </span>
+                            <span>
+                              {standard.minimumCenterlineRadiusInches.toFixed(
+                                3,
+                              )}
+                              ″
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <p>
+                        Standard hooks: 6db for #3–#8, 8db for #9–#11,
+                        and 10db for #14–#18. Galvanized and
+                        stirrup/tie requirements may differ.
+                      </p>
+                    </section>
                   </div>
                 )}
               </div>}
@@ -7291,6 +7339,7 @@ export default function ModelViewer() {
           onPickRebarEdge={() => undefined}
           pendingRebarLine={pendingRebarLine}
           draftRebarLines={draftAdvancedRun ? [] : rebarLines}
+          draftRebarBarNumber={rebarBarNumber}
           rebarSnapLines={
             advancedAnchorPickingId
               ? [...rebarGuideLines, ...rebarInnerGuideLines]

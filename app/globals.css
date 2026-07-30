@@ -2355,7 +2355,7 @@ body {
 }
 
 .parameter-menu {
-  width: 290px;
+  width: 430px;
   padding: 10px;
   gap: 8px;
 }
@@ -2374,6 +2374,73 @@ body {
   background: #fff;
   color: #111;
   padding: 0 8px;
+}
+
+.bend-standards {
+  margin-top: 2px;
+  border-top: 1px solid #111;
+  padding-top: 9px;
+}
+
+.bend-standards-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 7px;
+}
+
+.bend-standards-heading strong {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.bend-standards-heading span,
+.bend-standards p {
+  color: #5b6062;
+  font-size: 8px;
+}
+
+.bend-standards-table {
+  max-height: 210px;
+  overflow-y: auto;
+  border: 1px solid #111;
+}
+
+.bend-standard-row {
+  display: grid;
+  grid-template-columns: 42px repeat(3, minmax(0, 1fr));
+  min-height: 25px;
+  align-items: center;
+  border-bottom: 1px solid #d6d8d6;
+}
+
+.bend-standard-row:last-child {
+  border-bottom: 0;
+}
+
+.bend-standard-row > * {
+  padding: 0 6px;
+  text-align: right;
+}
+
+.bend-standard-row > :first-child {
+  text-align: left;
+}
+
+.bend-standard-header {
+  min-height: 22px;
+  background: #111;
+  color: #fff;
+  font-size: 8px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.bend-standards p {
+  margin: 7px 0 0;
+  line-height: 1.45;
 }
 
 .view-menu > span {

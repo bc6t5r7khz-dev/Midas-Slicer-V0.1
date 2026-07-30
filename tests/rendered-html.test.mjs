@@ -106,6 +106,8 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /Splay target/);
   assert.match(viewer, /Bar mark series/);
   assert.match(viewer, /BAR SPACING/);
+  assert.match(viewer, /CRSI Standard Bar Bends/);
+  assert.match(viewer, /draftRebarBarNumber=\{rebarBarNumber\}/);
   assert.match(viewer, /Bar OK/);
   assert.match(viewer, /slicing-list-title">Planes</);
   assert.match(viewer, /setSelectedRebarRunIds\(new Set\(\)\)/);

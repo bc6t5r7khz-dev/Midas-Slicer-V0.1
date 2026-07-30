@@ -13,6 +13,10 @@ import {
   transformPlane,
 } from "../lib/coordinateSystem";
 import { generateRebarInstances } from "../lib/rebarAdvanced";
+import {
+  applyStandardBendsToInstance,
+  rebarBendStandard,
+} from "../lib/rebarStandards";
 import type {
   Bounds,
   CameraViewpoint,
@@ -96,6 +100,7 @@ type Props = {
   onPickRebarEdge: (edgeIndex: number) => void;
   pendingRebarLine: RebarLine | null;
   draftRebarLines: RebarLine[];
+  draftRebarBarNumber: string;
   rebarSnapLines: RebarLine[];
   rebarSnapRequired: boolean;
   rebarPreviewStart: Vec3 | null;
@@ -632,6 +637,7 @@ export default function PointCloudViewport({
   onPickRebarEdge,
   pendingRebarLine,
   draftRebarLines,
+  draftRebarBarNumber,
   rebarSnapLines,
   rebarSnapRequired,
   rebarPreviewStart,
@@ -2261,11 +2267,13 @@ export default function PointCloudViewport({
       segments: Array<[Vec3, Vec3]>,
       joints: Vec3[],
       color: number,
+      diameterInches: number,
       alwaysVisible = false,
       radiusScale = 1,
     ) => {
       if (!segments.length || !inchesPerModelUnit) return;
-      const radius = (0.5 * radiusScale) / inchesPerModelUnit;
+      const radius =
+        (diameterInches * 0.5 * radiusScale) / inchesPerModelUnit;
       const rodMaterial = new THREE.MeshBasicMaterial({
         color,
         depthTest: !alwaysVisible,
@@ -2316,25 +2324,32 @@ export default function PointCloudViewport({
     type RodBuffers = {
       segments: Array<[Vec3, Vec3]>;
       joints: Vec3[];
+      diameterInches: number;
     };
     const rodsByColor = new Map<string, RodBuffers>();
     const selectedRodsByColor = new Map<string, RodBuffers>();
     for (const run of rebarRuns) {
       const runSelected = selectedRebarRunIds.has(run.id);
       const color = run.color ?? "#8f1717";
-      const colorBuffers = rodsByColor.get(color) ?? {
+      const diameterInches = rebarBendStandard(
+        run.barNumber,
+      ).diameterInches;
+      const rodKey = `${color}|${diameterInches}`;
+      const colorBuffers = rodsByColor.get(rodKey) ?? {
         segments: [],
         joints: [],
+        diameterInches,
       };
-      const selectedColorBuffers = selectedRodsByColor.get(color) ?? {
+      const selectedColorBuffers = selectedRodsByColor.get(rodKey) ?? {
         segments: [],
         joints: [],
+        diameterInches,
       };
-      if (!runSelected && !rodsByColor.has(color)) {
-        rodsByColor.set(color, colorBuffers);
+      if (!runSelected && !rodsByColor.has(rodKey)) {
+        rodsByColor.set(rodKey, colorBuffers);
       }
-      if (runSelected && !selectedRodsByColor.has(color)) {
-        selectedRodsByColor.set(color, selectedColorBuffers);
+      if (runSelected && !selectedRodsByColor.has(rodKey)) {
+        selectedRodsByColor.set(rodKey, selectedColorBuffers);
       }
       const targetSegments = runSelected
         ? selectedColorBuffers.segments
@@ -2397,7 +2412,13 @@ export default function PointCloudViewport({
           inchesPerModelUnit && run.lapOffsetInches
             ? run.lapOffsetInches / inchesPerModelUnit
             : 0,
-      });
+      }).map((instance) =>
+        applyStandardBendsToInstance(
+          instance,
+          run.barNumber,
+          inchesPerModelUnit,
+        ),
+      );
       for (const instance of instances) {
         for (const line of instance) {
           targetJoints.push(...line.points);
@@ -2422,18 +2443,20 @@ export default function PointCloudViewport({
         }
       }
     }
-    rodsByColor.forEach((buffers, color) => {
+    rodsByColor.forEach((buffers, key) => {
       addRodMeshes(
         buffers.segments,
         buffers.joints,
-        new THREE.Color(color).getHex(),
+        new THREE.Color(key.split("|")[0]).getHex(),
+        buffers.diameterInches,
       );
     });
-    selectedRodsByColor.forEach((buffers, color) => {
+    selectedRodsByColor.forEach((buffers, key) => {
       addRodMeshes(
         buffers.segments,
         buffers.joints,
-        new THREE.Color(color).getHex(),
+        new THREE.Color(key.split("|")[0]).getHex(),
+        buffers.diameterInches,
         true,
         1.35,
       );
@@ -2457,7 +2480,13 @@ export default function PointCloudViewport({
         ]);
       }
     }
-    addRodMeshes(draftSegments, draftJoints, 0xf04b43, true);
+    addRodMeshes(
+      draftSegments,
+      draftJoints,
+      0xf04b43,
+      rebarBendStandard(draftRebarBarNumber).diameterInches,
+      true,
+    );
     for (const anchor of rebarAdvancedAnchors) {
       const radius = Math.max(
         tolerance * 14,
@@ -2683,6 +2712,7 @@ export default function PointCloudViewport({
   }, [
     displayOffset,
     draftRebarLines,
+    draftRebarBarNumber,
     pendingRebarLine,
     rebarAxis,
     rebarGuideLines,
