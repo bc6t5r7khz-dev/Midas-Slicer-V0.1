@@ -237,6 +237,7 @@ export function generateRebarInstances(
   });
 
   const linearInstances = positions.map((position, index) => {
+    const distance = position + lapOffset;
     const pathPoint = instanceAnchors[index];
     const translation =
       pathPoint && pathOrigin

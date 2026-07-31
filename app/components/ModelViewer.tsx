@@ -13,6 +13,7 @@ import {
   getBounds,
   reframeDirection,
   reframePoint,
+  toLocal,
   transformNodes,
 } from "../lib/coordinateSystem";
 import { parseMctModel } from "../lib/mctParser";
@@ -23,12 +24,25 @@ import {
 } from "../lib/rebarGeometry";
 import {
   generateRebarInstances,
+  pointAlongRebarPath,
   rebarInstanceLength,
 } from "../lib/rebarAdvanced";
 import {
   applyStandardBendsToInstance,
   CRSI_REBAR_BEND_STANDARDS,
+  rebarBendStandard,
 } from "../lib/rebarStandards";
+import {
+  createDxf,
+  dxfCircle,
+  dxfFaces,
+  dxfLine,
+  dxfRebarLines,
+} from "../lib/dxfExport";
+import {
+  sectionPlaneAxes,
+  sectionRebarGeometry,
+} from "../lib/rebarSection";
 import { createSampleMct } from "../lib/sampleModel";
 import { smartFaceFromSeed } from "../lib/smartSelect";
 import {
@@ -613,6 +627,13 @@ export default function ModelViewer() {
     nonce: number;
     viewpoint: CameraViewpoint;
   } | null>(null);
+  const [sectionViewRequest, setSectionViewRequest] = useState<{
+    id: string;
+    nonce: number;
+    origin: Vec3;
+    normal: Vec3;
+    up: Vec3;
+  } | null>(null);
   const [rebarGroups, setRebarGroups] = useState<RebarGroup[]>([]);
   const [collapsedRebarGroupIds, setCollapsedRebarGroupIds] = useState<
     Set<string>
@@ -632,6 +653,7 @@ export default function ModelViewer() {
   const [rebarCoverOffsetInches, setRebarCoverOffsetInches] = useState(2);
   const [rebarSecondaryOffsetInches, setRebarSecondaryOffsetInches] =
     useState(4);
+  const [sectionThrowDepthInches, setSectionThrowDepthInches] = useState(12);
   const [topRebarPlaneDismissed, setTopRebarPlaneDismissed] = useState(false);
   const [activeRebarPlaneId, setActiveRebarPlaneId] =
     useState<string | null>(null);
@@ -673,6 +695,7 @@ export default function ModelViewer() {
   const [pendingRebarLine, setPendingRebarLine] =
     useState<RebarLine | null>(null);
   const [rebarSpacing, setRebarSpacing] = useState(12);
+  const [lapSnapDistanceInches, setLapSnapDistanceInches] = useState(12);
   const [customSpacingDraft, setCustomSpacingDraft] = useState("");
   const [rebarPathStart, setRebarPathStart] = useState<Vec3 | null>(null);
   const [rebarPathEnd, setRebarPathEnd] = useState<Vec3 | null>(null);
@@ -930,6 +953,13 @@ export default function ModelViewer() {
       normal: normalize(
         reframeDirection(
           activeSplayTargetPlane.objectNormal,
+          null,
+          basis,
+        ),
+      ),
+      vertical: normalize(
+        reframeDirection(
+          basis?.zAxis ?? { x: 0, y: 0, z: 1 },
           null,
           basis,
         ),
@@ -1362,6 +1392,47 @@ export default function ModelViewer() {
   const activeLappedWorkflow =
     rebarWorkflowKind === "lap" ||
     Boolean(editingRebarRun?.lappedFromRunId);
+  const lapSnapPoints = useMemo(() => {
+    if (!activeLappedWorkflow || !inchesPerModelUnit) return [];
+    const reference =
+      (rebarReferenceRunId
+        ? rebarRuns.find((run) => run.id === rebarReferenceRunId)
+        : null) ??
+      (editingRebarRun?.lappedFromRunId
+        ? rebarRuns.find(
+            (run) => run.id === editingRebarRun.lappedFromRunId,
+          )
+        : null);
+    const points = reference?.lines[0]?.points ?? [];
+    if (points.length < 2) return [];
+    const total = polylineLength(points);
+    const distance = Math.min(
+      total,
+      Math.max(0, lapSnapDistanceInches) / inchesPerModelUnit,
+    );
+    return [
+      pointAlongRebarPath(points, distance),
+      pointAlongRebarPath([...points].reverse(), distance),
+    ].filter(
+      (point, index, values) =>
+        values.findIndex(
+          (candidate) =>
+            Math.hypot(
+              candidate.x - point.x,
+              candidate.y - point.y,
+              candidate.z - point.z,
+            ) <= tolerance,
+        ) === index,
+    );
+  }, [
+    activeLappedWorkflow,
+    editingRebarRun,
+    inchesPerModelUnit,
+    lapSnapDistanceInches,
+    rebarReferenceRunId,
+    rebarRuns,
+    tolerance,
+  ]);
   useEffect(() => {
     if (rebarPhase !== "end") return;
     const source =
@@ -1378,6 +1449,33 @@ export default function ModelViewer() {
     rebarPhase,
     rebarReferenceRunId,
     rebarRuns,
+  ]);
+  const activeSectionView = useMemo(() => {
+    if (
+      activeTab !== "slicing" ||
+      !activeCustomSlice ||
+      !inchesPerModelUnit ||
+      !activeSlicePin
+    ) {
+      return null;
+    }
+    const normal = normalize(activeCustomSlice.normal);
+    return {
+      origin: addScaled(
+        activeCustomSlice.origin,
+        normal,
+        activeCustomSlice.offset,
+      ),
+      normal,
+      throwDepthModelUnits:
+        Math.max(0, sectionThrowDepthInches) / inchesPerModelUnit,
+    };
+  }, [
+    activeCustomSlice,
+    activeSlicePin,
+    activeTab,
+    inchesPerModelUnit,
+    sectionThrowDepthInches,
   ]);
   const draftAdvancedRun = useMemo<RebarRun | null>(() => {
     if (
@@ -1845,6 +1943,7 @@ export default function ModelViewer() {
         setRebarSecondaryOffsetInches(
           saved.rebarSecondaryOffsetInches ?? 4,
         );
+        setSectionThrowDepthInches(saved.sectionThrowDepthInches ?? 12);
         setTopRebarPlaneDismissed(saved.topRebarPlaneDismissed ?? false);
         setActiveRebarPlaneId(
           migratedRebar.planes[0]?.id ?? null,
@@ -1925,6 +2024,7 @@ export default function ModelViewer() {
         rebarGroups,
         rebarCoverOffsetInches,
         rebarSecondaryOffsetInches,
+        sectionThrowDepthInches,
         topRebarPlaneDismissed,
         showConcreteSkin,
         lineAndBar,
@@ -1962,6 +2062,7 @@ export default function ModelViewer() {
     rebarGroups,
     rebarCoverOffsetInches,
     rebarSecondaryOffsetInches,
+    sectionThrowDepthInches,
     topRebarPlaneDismissed,
     smartSelecting,
     smartVariant,
@@ -2026,6 +2127,7 @@ export default function ModelViewer() {
       rebarGroups,
       rebarCoverOffsetInches,
       rebarSecondaryOffsetInches,
+      sectionThrowDepthInches,
       topRebarPlaneDismissed,
       showConcreteSkin,
       lineAndBar,
@@ -2105,6 +2207,7 @@ export default function ModelViewer() {
       setRebarSecondaryOffsetInches(
         saved.rebarSecondaryOffsetInches ?? 4,
       );
+      setSectionThrowDepthInches(saved.sectionThrowDepthInches ?? 12);
       setTopRebarPlaneDismissed(saved.topRebarPlaneDismissed ?? false);
       setActiveRebarPlaneId(migrated.planes[0]?.id ?? null);
       setPreviewedRebarPlaneId(null);
@@ -2161,6 +2264,167 @@ export default function ModelViewer() {
       );
     }
   }
+
+  const bentInstancesForRun = (run: RebarRun) => {
+    if (!inchesPerModelUnit) return [];
+    const sourcePlane = rebarPlanes.find(
+      (plane) => plane.id === run.planeId,
+    );
+    const targetPlane = rebarPlanes.find(
+      (plane) => plane.id === run.advanced?.splay?.targetPlaneId,
+    );
+    const sourceNormal = sourcePlane
+      ? normalize(reframeDirection(sourcePlane.objectNormal, null, basis))
+      : null;
+    const targetNormal = targetPlane
+      ? normalize(reframeDirection(targetPlane.objectNormal, null, basis))
+      : null;
+    const sourceBaseOrigin = sourcePlane
+      ? reframePoint(sourcePlane.objectOrigin, null, basis)
+      : null;
+    const targetBaseOrigin = targetPlane
+      ? reframePoint(targetPlane.objectOrigin, null, basis)
+      : null;
+    return generateRebarInstances(run, {
+      sourceNormal,
+      sourceOrigin:
+        sourceBaseOrigin && sourceNormal
+          ? addScaled(
+              sourceBaseOrigin,
+              sourceNormal,
+              run.startOffset ?? run.start,
+            )
+          : null,
+      targetNormal,
+      targetOrigin:
+        targetBaseOrigin && targetNormal
+          ? addScaled(
+              targetBaseOrigin,
+              targetNormal,
+              run.advanced?.splay?.targetOffset ?? 0,
+            )
+          : null,
+      lapOffsetModelUnits: run.lapOffsetInches
+        ? run.lapOffsetInches / inchesPerModelUnit
+        : 0,
+    }).map((instance) =>
+      applyStandardBendsToInstance(
+        instance,
+        run.barNumber,
+        inchesPerModelUnit,
+      ),
+    );
+  };
+
+  const exportActiveSectionDxf = () => {
+    if (!activeSectionView || !inchesPerModelUnit || !activeSlicePin) {
+      setError("Select a saved slice before exporting a section DXF.");
+      return;
+    }
+    const preferredUp = normalize(
+      reframeDirection(
+        basis?.zAxis ?? { x: 0, y: 0, z: 1 },
+        null,
+        basis,
+      ),
+    );
+    const axes = sectionPlaneAxes(activeSectionView.normal, preferredUp);
+    const toSection = (point: Vec3): Vec3 => {
+      const delta = subtract(point, activeSectionView.origin);
+      return {
+        x: dot(delta, axes.right) * inchesPerModelUnit,
+        y: dot(delta, axes.up) * inchesPerModelUnit,
+        z: 0,
+      };
+    };
+    const entities: string[] = [];
+    createPlaneCoverOutlines(
+      allNodes,
+      elements,
+      activeSectionView.origin,
+      activeSectionView.normal,
+      0,
+    ).forEach((loop) =>
+      loop.forEach((point, index) =>
+        entities.push(
+          dxfLine(
+            toSection(point),
+            toSection(loop[(index + 1) % loop.length]),
+            "CONCRETE_SECTION",
+          ),
+        ),
+      ),
+    );
+    rebarRuns.forEach((run) => {
+      const standard = rebarBendStandard(run.barNumber);
+      bentInstancesForRun(run).forEach((instance) => {
+        const section = sectionRebarGeometry(
+          instance,
+          activeSectionView.origin,
+          activeSectionView.normal,
+          activeSectionView.throwDepthModelUnits,
+        );
+        section.projectedLines.forEach(({ start, end }) =>
+          entities.push(
+            dxfLine(toSection(start), toSection(end), `REBAR_${run.name}`),
+          ),
+        );
+        section.circles.forEach(({ center }) =>
+          entities.push(
+            dxfCircle(
+              toSection(center),
+              standard.diameterInches / 2,
+              `REBAR_${run.name}`,
+            ),
+          ),
+        );
+      });
+    });
+    downloadBlob(
+      new Blob([createDxf(entities)], {
+        type: "application/dxf;charset=utf-8",
+      }),
+      `${fileName.replace(/\.[^.]+$/, "") || "mct-project"}-${activeSlicePin.name.replace(/[^A-Za-z0-9_-]+/g, "-")}-section.dxf`,
+    );
+    setStatus(`${activeSlicePin.name} exported as a 2D reinforcing DXF.`);
+  };
+
+  const exportModelDxf = () => {
+    if (!inchesPerModelUnit) {
+      setError("Define the project scale before exporting DXF.");
+      return;
+    }
+    const toInches = (point: Vec3): Vec3 => {
+      const local = basis ? toLocal(point, basis) : point;
+      return {
+        x: local.x * inchesPerModelUnit,
+        y: local.y * inchesPerModelUnit,
+        z: local.z * inchesPerModelUnit,
+      };
+    };
+    const currentToInches = (point: Vec3): Vec3 => ({
+      x: point.x * inchesPerModelUnit,
+      y: point.y * inchesPerModelUnit,
+      z: point.z * inchesPerModelUnit,
+    });
+    const entities = dxfFaces(elementSkin.surfaces, toInches);
+    rebarRuns.forEach((run) =>
+      entities.push(
+        ...dxfRebarLines(
+          bentInstancesForRun(run),
+          currentToInches,
+          `REBAR_${run.name}`,
+        ),
+      ),
+    );
+    downloadBlob(
+      new Blob([createDxf(entities)], {
+        type: "application/dxf;charset=utf-8",
+      }),
+      `${fileName.replace(/\.[^.]+$/, "") || "mct-project"}-3d-model.dxf`,
+    );
+    setStatus("Concrete skin and 3D reinforcement exported as DXF.");
+  };
 
   const exportRebarQuantities = () => {
     if (!inchesPerModelUnit || !rebarRuns.length) return;
@@ -2965,6 +3229,39 @@ export default function ModelViewer() {
     setStatus("New slicing plane: select two nodes.");
   };
 
+  const requestReinforcingSectionView = (
+    planeId: string,
+    offset: number,
+    flipped: boolean,
+    id: string,
+  ) => {
+    const plane = rebarPlanes.find((candidate) => candidate.id === planeId);
+    if (!plane) return;
+    const baseOrigin = reframePoint(plane.objectOrigin, null, basis);
+    const baseNormal = normalize(
+      reframeDirection(plane.objectNormal, null, basis),
+    );
+    const normal = flipped
+      ? { x: -baseNormal.x, y: -baseNormal.y, z: -baseNormal.z }
+      : baseNormal;
+    const preferredUp = normalize(
+      reframeDirection(
+        basis?.zAxis ?? { x: 0, y: 0, z: 1 },
+        null,
+        basis,
+      ),
+    );
+    const axes = sectionPlaneAxes(normal, preferredUp);
+    setSectionViewRequest({
+      id,
+      nonce: Date.now(),
+      origin: addScaled(baseOrigin, baseNormal, offset),
+      normal,
+      up: axes.up,
+    });
+    setShowRebarInSlicing(true);
+  };
+
   const createSlicePin = () => {
     if (!selectedSlicingPlaneId) return;
     const pin: SlicePin = {
@@ -2978,6 +3275,12 @@ export default function ModelViewer() {
     setSelectedSlicePinId(pin.id);
     setSelectedSlicePinIds(new Set([pin.id]));
     setActiveSlicePinId(pin.id);
+    requestReinforcingSectionView(
+      pin.planeId,
+      pin.offset,
+      pin.flipSection ?? true,
+      pin.id,
+    );
     setPinAddedNotice(`${pin.name} added`);
     setStatus(`${pin.name} saved at this slice.`);
   };
@@ -2992,6 +3295,14 @@ export default function ModelViewer() {
     setFlipSliceSection(pin.flipSection ?? true);
     setSlicePreviewActive(true);
     setActiveSlicePinId(pin.id);
+    if (!applySavedView || !pin.viewpoint) {
+      requestReinforcingSectionView(
+        pin.planeId,
+        pin.offset,
+        pin.flipSection ?? true,
+        pin.id,
+      );
+    }
     if (applySavedView && pin.viewOptions) {
       setShowRebarInSlicing(pin.viewOptions.showRebar);
       setLineAndBar(pin.viewOptions.lineAndBar);
@@ -3255,6 +3566,7 @@ export default function ModelViewer() {
     setRebarStart(source.startOffset ?? source.start);
     setRebarEnd(source.endOffset ?? source.end);
     setRebarSpacing(source.spacingInches);
+    setLapSnapDistanceInches(12);
     setCustomSpacingDraft(
       [12, 9, 6].includes(source.spacingInches)
         ? ""
@@ -3668,18 +3980,32 @@ export default function ModelViewer() {
       setError("The selected source bar does not have a spacing direction.");
       return;
     }
-    if (!displayRebarPlane) {
+    const endpointPlane =
+      rebarSplayEnabled && displaySplayTargetPlane
+        ? displaySplayTargetPlane
+        : displayRebarPlane;
+    const endpointOffset =
+      rebarSplayEnabled && displaySplayTargetPlane
+        ? rebarSplayTargetOffset
+        : rebarEnd;
+    if (!endpointPlane) {
       setError("The selected source bar does not have a valid drawing plane.");
       return;
     }
-    const crossing = dot(direction, displayRebarPlane.normal);
+    const crossing = dot(direction, endpointPlane.normal);
     if (Math.abs(crossing) <= 1e-9) {
       setError(
-        "The source bar spacing direction does not cross its drawing plane.",
+        "The source bar spacing direction does not cross the selected end plane.",
       );
       return;
     }
-    const distance = (rebarEnd - rebarStart) / crossing;
+    const targetPoint = addScaled(
+      endpointPlane.origin,
+      endpointPlane.normal,
+      endpointOffset,
+    );
+    const distance =
+      dot(subtract(targetPoint, startPoint), endpointPlane.normal) / crossing;
     const endpoint = {
       x: startPoint.x + direction.x * distance,
       y: startPoint.y + direction.y * distance,
@@ -3850,9 +4176,12 @@ export default function ModelViewer() {
         const currentInches = current * inchesPerModelUnit;
         const exactNextInches =
           currentInches + rebarCoverOffsetInches * direction;
-        return Math.min(
-          limits[1],
-          Math.max(limits[0], exactNextInches / inchesPerModelUnit),
+        const next = exactNextInches / inchesPerModelUnit;
+        if (next < limits[0] - tolerance || next > limits[1] + tolerance) {
+          return current;
+        }
+        return Number(
+          Math.min(limits[1], Math.max(limits[0], next)).toFixed(9),
         );
       };
       if (rebarPhase === "start") {
@@ -3883,6 +4212,7 @@ export default function ModelViewer() {
     choosingSplayPlane,
     rebarSplayTargetPlaneId,
     splayTargetPlaneBounds,
+    tolerance,
   ]);
 
   const handleFacePick = (faceId: string) => {
@@ -4484,6 +4814,28 @@ export default function ModelViewer() {
                     Export Bar Quantity
                   </button>
                 )}
+                {(activeTab === "slicing" || activeTab === "rebar") && (
+                  <button
+                    disabled={!activeSectionView || !activeSlicePin}
+                    onClick={() => {
+                      exportActiveSectionDxf();
+                      setOpenHeaderMenu(null);
+                    }}
+                  >
+                    Export Active Section DXF
+                  </button>
+                )}
+                {(activeTab === "slicing" || activeTab === "rebar") && (
+                  <button
+                    disabled={!setupComplete}
+                    onClick={() => {
+                      exportModelDxf();
+                      setOpenHeaderMenu(null);
+                    }}
+                  >
+                    Export 3D Model DXF
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     loadText(createSampleMct(), "Demo bridge lattice");
@@ -4509,6 +4861,7 @@ export default function ModelViewer() {
                       <div><dt>Escape</dt><dd>Cancel the active drawing or edit</dd></div>
                       <div><dt>Backspace</dt><dd>Undo the current point or workflow step</dd></div>
                       <div><dt>Ctrl + Z</dt><dd>Undo rebar work</dd></div>
+                      <div><dt>Ctrl while drawing</dt><dd>Round a new bar segment to whole inches</dd></div>
                       <div><dt>Space</dt><dd>Complete or confirm a volume face</dd></div>
                       <div><dt>Shift + click</dt><dd>Snap a rebar section to a node</dd></div>
                       <div><dt>Shift + arrows</dt><dd>Move a section by the primary offset</dd></div>
@@ -4520,7 +4873,7 @@ export default function ModelViewer() {
           </div>
           {(activeTab === "rebar" || activeTab === "slicing") && (
             <>
-              {activeTab === "rebar" && <div className="header-menu">
+              <div className="header-menu">
                 <button
                   type="button"
                   aria-expanded={openHeaderMenu === "parameters"}
@@ -4534,6 +4887,21 @@ export default function ModelViewer() {
                 </button>
                 {openHeaderMenu === "parameters" && (
                   <div className="header-menu-popover parameter-menu">
+                    {activeTab === "slicing" && (
+                      <label>
+                        Reinforcing section throw depth (in)
+                        <DraftNumberInput
+                          min={0}
+                          step={1}
+                          value={sectionThrowDepthInches}
+                          onValueChange={(value) =>
+                            setSectionThrowDepthInches(Math.max(0, value))
+                          }
+                        />
+                      </label>
+                    )}
+                    {activeTab === "rebar" && (
+                      <>
                     <label>
                       Primary perimeter offset (in)
                       <DraftNumberInput
@@ -4596,9 +4964,11 @@ export default function ModelViewer() {
                         stirrup/tie requirements may differ.
                       </p>
                     </section>
+                      </>
+                    )}
                   </div>
                 )}
-              </div>}
+              </div>
               <div className="header-menu">
                 <button
                   type="button"
@@ -6112,6 +6482,19 @@ export default function ModelViewer() {
                         directions snap gently.
                       </span>
                     </div>
+                    {activeLappedWorkflow && (
+                      <label className="lap-snap-distance">
+                        Lap snap distance from each source-bar end (in)
+                        <DraftNumberInput
+                          min={0}
+                          step={1}
+                          value={lapSnapDistanceInches}
+                          onValueChange={(value) =>
+                            setLapSnapDistanceInches(Math.max(0, value))
+                          }
+                        />
+                      </label>
+                    )}
                     {pendingRebarLine && (
                       <small>
                         {pendingRebarLine.points.length} point(s) · Backspace
@@ -6404,7 +6787,7 @@ export default function ModelViewer() {
                             setRebarSplayTargetOffset(0);
                             setPreviewedRebarPlaneId(activeRebarPlaneId);
                             setStatus(
-                              "Using the starting plane for the end section.",
+                              "Other-plane selection cancelled.",
                             );
                           } else {
                             const existingSplay = Boolean(
@@ -6425,7 +6808,7 @@ export default function ModelViewer() {
                         }}
                       >
                         {choosingSplayPlane
-                          ? "Use Starting Plane"
+                          ? "Cancel Other Plane"
                           : "Choose Other Plane"}
                       </button>
                       <button
@@ -7340,6 +7723,11 @@ export default function ModelViewer() {
           pendingRebarLine={pendingRebarLine}
           draftRebarLines={draftAdvancedRun ? [] : rebarLines}
           draftRebarBarNumber={rebarBarNumber}
+          rebarLapSnapPoints={
+            activeTab === "rebar" && rebarPhase === "lines"
+              ? lapSnapPoints
+              : []
+          }
           rebarSnapLines={
             advancedAnchorPickingId
               ? [...rebarGuideLines, ...rebarInnerGuideLines]
@@ -7376,6 +7764,8 @@ export default function ModelViewer() {
               : null
           }
           rebarPlanePreviews={displayRebarPlanePreviews}
+          rebarSectionView={activeSectionView}
+          sectionViewRequest={sectionViewRequest}
           rebarSection={
             advancedAnchorSection !== null
               ? advancedAnchorSection

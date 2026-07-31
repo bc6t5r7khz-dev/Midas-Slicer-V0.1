@@ -56,6 +56,11 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /Primary perimeter offset/);
   assert.match(viewer, /Import Project/);
   assert.match(viewer, /Export Project/);
+  assert.match(viewer, /Export Active Section DXF/);
+  assert.match(viewer, /Export 3D Model DXF/);
+  assert.match(viewer, /Reinforcing section throw depth/);
+  assert.match(viewer, /Lap snap distance from each source-bar end/);
+  assert.match(viewer, /Round a new bar segment to whole inches/);
   assert.match(viewer, /Shift \+ arrows/);
   assert.match(viewer, /Show all Planes/);
   assert.match(viewer, /saved-view-ribbon/);

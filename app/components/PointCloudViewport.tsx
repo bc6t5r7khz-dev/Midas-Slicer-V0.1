@@ -17,6 +17,7 @@ import {
   applyStandardBendsToInstance,
   rebarBendStandard,
 } from "../lib/rebarStandards";
+import { sectionRebarGeometry } from "../lib/rebarSection";
 import type {
   Bounds,
   CameraViewpoint,
@@ -101,6 +102,7 @@ type Props = {
   pendingRebarLine: RebarLine | null;
   draftRebarLines: RebarLine[];
   draftRebarBarNumber: string;
+  rebarLapSnapPoints: Vec3[];
   rebarSnapLines: RebarLine[];
   rebarSnapRequired: boolean;
   rebarPreviewStart: Vec3 | null;
@@ -123,6 +125,18 @@ type Props = {
     offset?: number;
     borderOnly?: boolean;
   }>;
+  rebarSectionView: {
+    origin: Vec3;
+    normal: Vec3;
+    throwDepthModelUnits: number;
+  } | null;
+  sectionViewRequest: {
+    id: string;
+    nonce: number;
+    origin: Vec3;
+    normal: Vec3;
+    up: Vec3;
+  } | null;
   inchesPerModelUnit: number | null;
   showConcreteSkin: boolean;
   lineAndBar: boolean;
@@ -638,6 +652,7 @@ export default function PointCloudViewport({
   pendingRebarLine,
   draftRebarLines,
   draftRebarBarNumber,
+  rebarLapSnapPoints,
   rebarSnapLines,
   rebarSnapRequired,
   rebarPreviewStart,
@@ -648,6 +663,8 @@ export default function PointCloudViewport({
   rebarSection,
   rebarDrawingPlane,
   rebarPlanePreviews,
+  rebarSectionView,
+  sectionViewRequest,
   inchesPerModelUnit,
   showConcreteSkin,
   lineAndBar,
@@ -674,6 +691,7 @@ export default function PointCloudViewport({
   >([]);
   const rebarGuidePointsRef = useRef<Vec3[]>([]);
   const rebarSnapLinesRef = useRef<RebarLine[]>(rebarSnapLines);
+  const rebarLapSnapPointsRef = useRef<Vec3[]>(rebarLapSnapPoints);
   const rebarSnapRequiredRef = useRef(rebarSnapRequired);
   const pendingRebarLineRef = useRef(pendingRebarLine);
   const rebarPreviewStartRef = useRef(rebarPreviewStart);
@@ -733,6 +751,7 @@ export default function PointCloudViewport({
   rebarDrawingPlaneRef.current = rebarDrawingPlane;
   pendingRebarLineRef.current = pendingRebarLine;
   rebarSnapLinesRef.current = rebarSnapLines;
+  rebarLapSnapPointsRef.current = rebarLapSnapPoints;
   rebarSnapRequiredRef.current = rebarSnapRequired;
   rebarPreviewStartRef.current = rebarPreviewStart;
   inchesPerModelUnitRef.current = inchesPerModelUnit;
@@ -798,6 +817,54 @@ export default function PointCloudViewport({
     state.camera.lookAt(state.controls.target);
     state.controls.update();
   }, [viewpointToApply]);
+
+  useEffect(() => {
+    const state = sceneRef.current;
+    if (!state || !sectionViewRequest || !allNodes.length) return;
+    const target = toThree(sectionViewRequest.origin, displayOffset);
+    const normal = new THREE.Vector3(
+      sectionViewRequest.normal.x,
+      sectionViewRequest.normal.y,
+      sectionViewRequest.normal.z,
+    ).normalize();
+    const up = new THREE.Vector3(
+      sectionViewRequest.up.x,
+      sectionViewRequest.up.y,
+      sectionViewRequest.up.z,
+    )
+      .addScaledVector(
+        normal,
+        -normal.dot(
+          new THREE.Vector3(
+            sectionViewRequest.up.x,
+            sectionViewRequest.up.y,
+            sectionViewRequest.up.z,
+          ),
+        ),
+      )
+      .normalize();
+    const extent = Math.max(
+      ...allNodes.map((node) => {
+        const point = node.local ?? node.global;
+        return Math.hypot(
+          point.x - sectionViewRequest.origin.x,
+          point.y - sectionViewRequest.origin.y,
+          point.z - sectionViewRequest.origin.z,
+        );
+      }),
+      1,
+    );
+    const distance =
+      (extent * 1.25) /
+      Math.tan(THREE.MathUtils.degToRad(state.camera.fov / 2));
+    state.camera.up.copy(up);
+    state.camera.position.copy(target).addScaledVector(normal, distance);
+    state.controls.target.copy(target);
+    state.camera.lookAt(target);
+    state.camera.updateProjectionMatrix();
+    state.controls.update();
+    state.controls.saveState();
+  }, [allNodes, displayOffset, sectionViewRequest]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -1055,6 +1122,21 @@ export default function PointCloudViewport({
             }
           }
         }
+        for (const point of rebarLapSnapPointsRef.current) {
+          const projected = toThree(
+            point,
+            displayOffsetRef.current,
+          ).project(camera);
+          const distance = Math.hypot(
+            event.clientX -
+              (rect.left + ((projected.x + 1) * rect.width) / 2),
+            event.clientY -
+              (rect.top + ((1 - projected.y) * rect.height) / 2),
+          );
+          if (distance <= 22 && (!closest || distance < closest.distance)) {
+            closest = { point, distance };
+          }
+        }
         return closest?.point ?? null;
       };
 
@@ -1224,6 +1306,26 @@ export default function PointCloudViewport({
             point.x = previous.x + planeVertical.x * verticalDelta;
             point.y = previous.y + planeVertical.y * verticalDelta;
             point.z = previous.z + planeVertical.z * verticalDelta;
+          }
+          if (event.ctrlKey && inchesPerModelUnitRef.current) {
+            const snappedDelta = new THREE.Vector3(
+              point.x - previous.x,
+              point.y - previous.y,
+              point.z - previous.z,
+            );
+            const modelLength = snappedDelta.length();
+            if (modelLength > 1e-9) {
+              const wholeInches = Math.max(
+                1,
+                Math.round(modelLength * inchesPerModelUnitRef.current),
+              );
+              snappedDelta.setLength(
+                wholeInches / inchesPerModelUnitRef.current,
+              );
+              point.x = previous.x + snappedDelta.x;
+              point.y = previous.y + snappedDelta.y;
+              point.z = previous.z + snappedDelta.z;
+            }
           }
         }
         return { point, snapped: false };
@@ -2416,20 +2518,44 @@ export default function PointCloudViewport({
         applyStandardBendsToInstance(
           instance,
           run.barNumber,
-          inchesPerModelUnit,
+          inchesPerModelUnit ?? 1,
         ),
       );
       for (const instance of instances) {
         for (const line of instance) {
-          targetJoints.push(...line.points);
-          for (let index = 0; index < line.points.length - 1; index += 1) {
-            targetSegments.push([line.points[index], line.points[index + 1]]);
-          }
-          if (line.closed && line.points.length > 2) {
-            targetSegments.push([
-              line.points[line.points.length - 1],
-              line.points[0],
-            ]);
+          if (rebarSectionView) {
+            const section = sectionRebarGeometry(
+              [line],
+              rebarSectionView.origin,
+              rebarSectionView.normal,
+              rebarSectionView.throwDepthModelUnits,
+            );
+            const lift = Math.max(tolerance * 5, 1e-8);
+            const towardCamera = (point: Vec3): Vec3 => ({
+              x: point.x + rebarSectionView.normal.x * lift,
+              y: point.y + rebarSectionView.normal.y * lift,
+              z: point.z + rebarSectionView.normal.z * lift,
+            });
+            section.projectedLines.forEach(({ start, end }) => {
+              const liftedStart = towardCamera(start);
+              const liftedEnd = towardCamera(end);
+              targetSegments.push([liftedStart, liftedEnd]);
+              targetJoints.push(liftedStart, liftedEnd);
+            });
+            section.circles.forEach(({ center }) =>
+              targetJoints.push(towardCamera(center)),
+            );
+          } else {
+            targetJoints.push(...line.points);
+            for (let index = 0; index < line.points.length - 1; index += 1) {
+              targetSegments.push([line.points[index], line.points[index + 1]]);
+            }
+            if (line.closed && line.points.length > 2) {
+              targetSegments.push([
+                line.points[line.points.length - 1],
+                line.points[0],
+              ]);
+            }
           }
         }
       }
@@ -2487,6 +2613,25 @@ export default function PointCloudViewport({
       rebarBendStandard(draftRebarBarNumber).diameterInches,
       true,
     );
+    if (rebarLapSnapPoints.length) {
+      const markerRadius = Math.max(
+        tolerance * 18,
+        inchesPerModelUnit ? 0.7 / inchesPerModelUnit : tolerance * 18,
+      );
+      rebarLapSnapPoints.forEach((point) => {
+        const marker = new THREE.Mesh(
+          new THREE.SphereGeometry(markerRadius, 18, 12),
+          new THREE.MeshBasicMaterial({
+            color: 0x1688ff,
+            depthTest: false,
+            depthWrite: false,
+          }),
+        );
+        marker.position.copy(toThree(point, displayOffset));
+        marker.renderOrder = 45;
+        state.rebarGroup.add(marker);
+      });
+    }
     for (const anchor of rebarAdvancedAnchors) {
       const radius = Math.max(
         tolerance * 14,
@@ -2724,6 +2869,8 @@ export default function PointCloudViewport({
     rebarPathStart,
     rebarDrawingPlane,
     rebarPlanePreviews,
+    rebarSectionView,
+    rebarLapSnapPoints,
     rebarPlanes,
     rebarAdvancedAnchors,
     rebarRuns,

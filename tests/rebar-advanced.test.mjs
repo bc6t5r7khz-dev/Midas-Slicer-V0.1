@@ -158,3 +158,23 @@ test("endpoint anchors interpolate bar length along a run", () => {
   );
   assert.equal(JSON.stringify(instances.map(rebarInstanceLength)), "[1,2,3]");
 });
+
+test("applies a lap offset when a run uses its saved distribution direction", () => {
+  const run = {
+    ...baseRun,
+    pathPoints: undefined,
+    pathStart: undefined,
+    distributionVector: { x: 0, y: 1, z: 0 },
+    positions: [0, 5],
+  };
+  const instances = generateRebarInstances(run, {
+    lapOffsetModelUnits: 1,
+  });
+  assert.equal(
+    JSON.stringify(instances.map((instance) => instance[0].points[0])),
+    JSON.stringify([
+      { x: 0, y: 1, z: 0 },
+      { x: 0, y: 6, z: 0 },
+    ]),
+  );
+});

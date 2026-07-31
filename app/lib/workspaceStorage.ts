@@ -38,6 +38,7 @@ export type SavedWorkspace = {
   rebarGroups?: RebarGroup[];
   rebarCoverOffsetInches?: number;
   rebarSecondaryOffsetInches?: number;
+  sectionThrowDepthInches?: number;
   topRebarPlaneDismissed?: boolean;
   showConcreteSkin?: boolean;
   lineAndBar?: boolean;
