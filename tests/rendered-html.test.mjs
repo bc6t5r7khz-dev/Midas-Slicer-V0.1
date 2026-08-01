@@ -130,6 +130,11 @@ test("includes plane-based rebar and quantity export workflows", async () => {
     styles,
     /\.combined-slicing \.slice-pin-list[\s\S]*max-height: none/,
   );
+  assert.match(styles, /--control-rail-width: 340px/);
+  assert.match(
+    styles,
+    /\.combined-slicing \.plane-list-actions,[\s\S]*\.combined-slicing \.pin-management-actions[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/,
+  );
   assert.match(
     styles,
     /\.rebar-content > \.rebar-plane-manager[\s\S]*max-height: none/,

@@ -283,7 +283,14 @@ function disposeGroup(group: THREE.Group) {
       const materials = Array.isArray(sourceMaterial)
         ? sourceMaterial
         : [sourceMaterial];
-      materials.forEach((material) => material.dispose());
+      materials.forEach((material) => {
+        if ("map" in material) {
+          (
+            material as THREE.Material & { map?: THREE.Texture | null }
+          ).map?.dispose();
+        }
+        material.dispose();
+      });
     } else if (child instanceof THREE.Sprite) {
       child.material.map?.dispose();
       child.material.dispose();
@@ -2462,6 +2469,61 @@ export default function PointCloudViewport({
       alwaysVisible = false,
       radiusScale = 1,
     ) => {
+      if (!segments.length && !joints.length) return;
+      if (rebarSectionView) {
+        if (segments.length) {
+          const geometry = new LineSegmentsGeometry();
+          geometry.setPositions(
+            segments.flatMap(([start, end]) => [
+              ...toThree(start, displayOffset).toArray(),
+              ...toThree(end, displayOffset).toArray(),
+            ]),
+          );
+          const material = new LineMaterial({
+            color,
+            linewidth: alwaysVisible ? 4.5 : 2.75,
+            depthTest: false,
+            depthWrite: false,
+            resolution: new THREE.Vector2(
+              state.renderer.domElement.clientWidth || 1,
+              state.renderer.domElement.clientHeight || 1,
+            ),
+          });
+          const linework = new LineSegments2(geometry, material);
+          linework.renderOrder = alwaysVisible ? 42 : 40;
+          state.rebarGroup.add(linework);
+        }
+        if (joints.length) {
+          const dotCanvas = document.createElement("canvas");
+          dotCanvas.width = 32;
+          dotCanvas.height = 32;
+          const context = dotCanvas.getContext("2d");
+          if (context) {
+            context.fillStyle = "#fff";
+            context.beginPath();
+            context.arc(16, 16, 14, 0, Math.PI * 2);
+            context.fill();
+          }
+          const texture = new THREE.CanvasTexture(dotCanvas);
+          const geometry = new THREE.BufferGeometry().setFromPoints(
+            joints.map((point) => toThree(point, displayOffset)),
+          );
+          const material = new THREE.PointsMaterial({
+            color,
+            map: texture,
+            alphaTest: 0.5,
+            transparent: true,
+            size: alwaysVisible ? 11 : 8,
+            sizeAttenuation: false,
+            depthTest: false,
+            depthWrite: false,
+          });
+          const dots = new THREE.Points(geometry, material);
+          dots.renderOrder = alwaysVisible ? 43 : 41;
+          state.rebarGroup.add(dots);
+        }
+        return;
+      }
       if (!segments.length || !inchesPerModelUnit) return;
       const radius =
         (diameterInches * 0.5 * radiusScale) / inchesPerModelUnit;
@@ -2550,40 +2612,46 @@ export default function PointCloudViewport({
         : colorBuffers.joints;
       const instances = generatedRebarInstances.get(run.id) ?? [];
       for (const instance of instances) {
+        if (rebarSectionView) {
+          const section = sectionRebarGeometry(
+            instance,
+            rebarSectionView.origin,
+            rebarSectionView.normal,
+            rebarSectionView.throwDepthModelUnits,
+          );
+          const lift = Math.max(tolerance * 5, 1e-8);
+          const towardCamera = (point: Vec3): Vec3 => ({
+            x: point.x + rebarSectionView.normal.x * lift,
+            y: point.y + rebarSectionView.normal.y * lift,
+            z: point.z + rebarSectionView.normal.z * lift,
+          });
+          section.projectedLines.forEach(({ start, end }) => {
+            targetSegments.push([towardCamera(start), towardCamera(end)]);
+          });
+          section.circles.forEach(({ center }) => {
+            const point = towardCamera(center);
+            const duplicate = targetJoints.some(
+              (candidate) =>
+                Math.hypot(
+                  candidate.x - point.x,
+                  candidate.y - point.y,
+                  candidate.z - point.z,
+                ) <= Math.max(tolerance * 10, 1e-7),
+            );
+            if (!duplicate) targetJoints.push(point);
+          });
+          continue;
+        }
         for (const line of instance) {
-          if (rebarSectionView) {
-            const section = sectionRebarGeometry(
-              [line],
-              rebarSectionView.origin,
-              rebarSectionView.normal,
-              rebarSectionView.throwDepthModelUnits,
-            );
-            const lift = Math.max(tolerance * 5, 1e-8);
-            const towardCamera = (point: Vec3): Vec3 => ({
-              x: point.x + rebarSectionView.normal.x * lift,
-              y: point.y + rebarSectionView.normal.y * lift,
-              z: point.z + rebarSectionView.normal.z * lift,
-            });
-            section.projectedLines.forEach(({ start, end }) => {
-              const liftedStart = towardCamera(start);
-              const liftedEnd = towardCamera(end);
-              targetSegments.push([liftedStart, liftedEnd]);
-              targetJoints.push(liftedStart, liftedEnd);
-            });
-            section.circles.forEach(({ center }) =>
-              targetJoints.push(towardCamera(center)),
-            );
-          } else {
-            targetJoints.push(...line.points);
-            for (let index = 0; index < line.points.length - 1; index += 1) {
-              targetSegments.push([line.points[index], line.points[index + 1]]);
-            }
-            if (line.closed && line.points.length > 2) {
-              targetSegments.push([
-                line.points[line.points.length - 1],
-                line.points[0],
-              ]);
-            }
+          targetJoints.push(...line.points);
+          for (let index = 0; index < line.points.length - 1; index += 1) {
+            targetSegments.push([line.points[index], line.points[index + 1]]);
+          }
+          if (line.closed && line.points.length > 2) {
+            targetSegments.push([
+              line.points[line.points.length - 1],
+              line.points[0],
+            ]);
           }
         }
       }

@@ -37,6 +37,41 @@ test("draws a bar crossing the cut as a section circle", () => {
     JSON.parse(JSON.stringify(result.circles[0].center)),
     { x: 2, y: 3, z: 0 },
   );
+  assert.equal(result.projectedLines.length, 0);
+});
+
+test("shows an oblique crossing as one dot instead of a projected dash", () => {
+  const result = sectionRebarGeometry(
+    [
+      { id: "oblique-a", points: [{ x: -4, y: 1, z: -5 }, { x: 4, y: 1, z: 5 }] },
+      { id: "oblique-b", points: [{ x: 4, y: 1, z: 5 }, { x: -4, y: 1, z: -5 }] },
+    ],
+    origin,
+    normal,
+    12,
+  );
+  assert.equal(result.circles.length, 1);
+  assert.equal(result.projectedLines.length, 0);
+});
+
+test("shows an in-depth bar aimed into the page as a section dot", () => {
+  const result = sectionRebarGeometry(
+    [
+      {
+        id: "behind-cut",
+        points: [{ x: 2, y: 3, z: -2 }, { x: 5, y: 3, z: -10 }],
+      },
+    ],
+    origin,
+    normal,
+    12,
+  );
+  assert.equal(result.circles.length, 1);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.circles[0].center)),
+    { x: 2, y: 3, z: 0 },
+  );
+  assert.equal(result.projectedLines.length, 0);
 });
 
 test("projects in-depth bars and hides bars beyond the throw depth", () => {

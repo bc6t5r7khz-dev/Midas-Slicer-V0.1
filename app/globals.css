@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  --control-rail-width: 340px;
   --ink: #eaf5f8;
   --muted: #8298a2;
   --panel: #0c171f;
@@ -39,7 +40,7 @@ button {
 .app-shell {
   min-height: 100svh;
   display: grid;
-  grid-template: 68px minmax(0, 1fr) / 324px minmax(0, 1fr);
+  grid-template: 68px minmax(0, 1fr) / var(--control-rail-width) minmax(0, 1fr);
   overflow: hidden;
   background: var(--background);
 }
@@ -82,7 +83,7 @@ button {
 .topbar {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: 324px minmax(0, 1fr) auto;
+  grid-template-columns: var(--control-rail-width) minmax(0, 1fr) auto;
   align-items: center;
   border-bottom: 1px solid var(--line);
   background: #0a151d;
@@ -1875,7 +1876,7 @@ body {
 }
 
 .app-shell {
-  grid-template-columns: 340px minmax(0, 1fr);
+  grid-template-columns: var(--control-rail-width) minmax(0, 1fr);
   background: var(--background);
 }
 
@@ -2556,7 +2557,7 @@ input[type="range"]::-moz-range-thumb {
 
 /* Compact rebar rail */
 .topbar {
-  grid-template-columns: 324px minmax(0, 1fr) auto;
+  grid-template-columns: var(--control-rail-width) minmax(0, 1fr) auto;
 }
 
 .rebar-rail {
@@ -3638,6 +3639,15 @@ input[type="range"]::-moz-range-thumb {
 .combined-slicing .plane-list-actions,
 .combined-slicing .pin-management-actions {
   margin: 7px 0 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.combined-slicing .plane-list-actions .button,
+.combined-slicing .pin-management-actions .button {
+  width: 100%;
+  min-height: 32px;
+  margin: 0;
 }
 
 .saved-view-ribbon button:hover:not(.active) {

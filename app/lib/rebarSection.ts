@@ -89,6 +89,16 @@ export function sectionRebarGeometry(
   const projectedLines: SectionLine[] = [];
   const circles: SectionCircle[] = [];
   const tolerance = Math.max(depth * 1e-8, 1e-8);
+  const addCircle = (center: Vec3) => {
+    if (
+      !circles.some(
+        (candidate) =>
+          length(subtract(candidate.center, center)) <= tolerance * 10,
+      )
+    ) {
+      circles.push({ center });
+    }
+  };
 
   for (const line of lines) {
     const segmentCount =
@@ -99,23 +109,20 @@ export function sectionRebarGeometry(
       const startDistance = dot(subtract(start, planeOrigin), normal);
       const endDistance = dot(subtract(end, planeOrigin), normal);
       const distanceDelta = endDistance - startDistance;
-      if (
+      const crossesCut =
         Math.abs(distanceDelta) > tolerance &&
-        startDistance * endDistance <= tolerance
-      ) {
+        ((startDistance <= tolerance && endDistance >= -tolerance) ||
+          (endDistance <= tolerance && startDistance >= -tolerance));
+      if (crossesCut) {
         const amount = Math.max(
           0,
           Math.min(1, -startDistance / distanceDelta),
         );
-        const center = lerp(start, end, amount);
-        if (
-          !circles.some(
-            (candidate) =>
-              length(subtract(candidate.center, center)) <= tolerance * 10,
-          )
-        ) {
-          circles.push({ center });
-        }
+        addCircle(lerp(start, end, amount));
+        // A segment passing through the cut is represented by its section
+        // marker only. Flattening that same segment onto the plane produces a
+        // misleading dash (or a long protruding line for an oblique bar).
+        continue;
       }
       const clipped = clipSegmentToDepth(
         start,
@@ -127,6 +134,25 @@ export function sectionRebarGeometry(
       if (!clipped) continue;
       const projectedStart = projectToPlane(clipped[0], planeOrigin, normal);
       const projectedEnd = projectToPlane(clipped[1], planeOrigin, normal);
+      const segmentLength = length(subtract(end, start));
+      const normalAlignment =
+        segmentLength > tolerance
+          ? Math.abs(distanceDelta) / segmentLength
+          : 0;
+      if (normalAlignment >= 0.5) {
+        const clippedStartDistance = Math.abs(
+          dot(subtract(clipped[0], planeOrigin), normal),
+        );
+        const clippedEndDistance = Math.abs(
+          dot(subtract(clipped[1], planeOrigin), normal),
+        );
+        addCircle(
+          clippedStartDistance <= clippedEndDistance
+            ? projectedStart
+            : projectedEnd,
+        );
+        continue;
+      }
       if (length(subtract(projectedEnd, projectedStart)) > tolerance) {
         projectedLines.push({
           start: projectedStart,
