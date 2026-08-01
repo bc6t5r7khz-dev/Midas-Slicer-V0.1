@@ -4861,7 +4861,7 @@ export default function ModelViewer() {
                       <div><dt>Escape</dt><dd>Cancel the active drawing or edit</dd></div>
                       <div><dt>Backspace</dt><dd>Undo the current point or workflow step</dd></div>
                       <div><dt>Ctrl + Z</dt><dd>Undo rebar work</dd></div>
-                      <div><dt>Ctrl while drawing</dt><dd>Round a new bar segment to whole inches</dd></div>
+                      <div><dt>Shift while drawing</dt><dd>Round a new bar segment to whole inches</dd></div>
                       <div><dt>Space</dt><dd>Complete or confirm a volume face</dd></div>
                       <div><dt>Shift + click</dt><dd>Snap a rebar section to a node</dd></div>
                       <div><dt>Shift + arrows</dt><dd>Move a section by the primary offset</dd></div>
@@ -6479,7 +6479,9 @@ export default function ModelViewer() {
                         Grey = {rebarCoverOffsetInches}″ cover · pink ={" "}
                         {rebarSecondaryOffsetInches}″ cover · vertices snap
                         firmly · guide lines and plane horizontal/vertical
-                        directions snap gently.
+                        directions snap gently. Every point may also be placed
+                        freely anywhere on the active plane. Hold Shift for a
+                        whole-inch segment length.
                       </span>
                     </div>
                     {activeLappedWorkflow && (
@@ -6558,9 +6560,8 @@ export default function ModelViewer() {
                     <div className="selection-callout">
                       <strong>Pick an anchor on the completed bar</strong>
                       <span>
-                        Click anywhere on the active plane, including outside
-                        the member or behind visible concrete. Vertices and
-                        guide lines remain optional snaps.
+                        Click any point along the completed bar. The first
+                        spacing-path anchor must lie on the bar itself.
                       </span>
                     </div>
                     {editingRebarRunId && rebarPathStart && (
@@ -7233,8 +7234,8 @@ export default function ModelViewer() {
                             <span>
                               <strong>Vary bar length</strong>
                               <small>
-                                Drive the last drawn point through a separate
-                                endpoint path along the run.
+                                Vary only the last point you drew. Draw from the
+                                fixed side toward the side whose length changes.
                               </small>
                             </span>
                           </label>
@@ -7739,9 +7740,11 @@ export default function ModelViewer() {
                   ? [...rebarGuideLines, ...rebarInnerGuideLines]
                   : []
           }
-          rebarSnapRequired={false}
+          rebarSnapRequired={rebarPhase === "path-start"}
           rebarPreviewStart={
-            rebarPhase === "path-end" ? rebarPathStart : null
+            rebarPhase === "path-end"
+              ? rebarPathPoints[rebarPathPoints.length - 1] ?? rebarPathStart
+              : null
           }
           rebarPathStart={rebarPathStart}
           rebarPathEnd={rebarPathEnd}

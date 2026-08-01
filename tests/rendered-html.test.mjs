@@ -61,6 +61,9 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /Reinforcing section throw depth/);
   assert.match(viewer, /Lap snap distance from each source-bar end/);
   assert.match(viewer, /Round a new bar segment to whole inches/);
+  assert.match(viewer, /Shift while drawing/);
+  assert.match(viewer, /rebarSnapRequired=\{rebarPhase === "path-start"\}/);
+  assert.match(viewer, /rebarPathPoints\[rebarPathPoints\.length - 1\]/);
   assert.match(viewer, /Shift \+ arrows/);
   assert.match(viewer, /Show all Planes/);
   assert.match(viewer, /saved-view-ribbon/);

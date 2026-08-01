@@ -726,6 +726,7 @@ export default function PointCloudViewport({
     clientX: number;
     clientY: number;
     inches: number;
+    wholeInchSnap: boolean;
   } | null>(null);
 
   nodesRef.current = nodes;
@@ -1307,7 +1308,8 @@ export default function PointCloudViewport({
             point.y = previous.y + planeVertical.y * verticalDelta;
             point.z = previous.z + planeVertical.z * verticalDelta;
           }
-          if (event.ctrlKey && inchesPerModelUnitRef.current) {
+          let wholeInchSnap = false;
+          if (event.shiftKey && inchesPerModelUnitRef.current) {
             const snappedDelta = new THREE.Vector3(
               point.x - previous.x,
               point.y - previous.y,
@@ -1325,8 +1327,10 @@ export default function PointCloudViewport({
               point.x = previous.x + snappedDelta.x;
               point.y = previous.y + snappedDelta.y;
               point.z = previous.z + snappedDelta.z;
+              wholeInchSnap = true;
             }
           }
+          return { point, snapped: false, wholeInchSnap };
         }
         return { point, snapped: false };
       };
@@ -1485,6 +1489,9 @@ export default function PointCloudViewport({
                     candidate.point.y - previous.y,
                     candidate.point.z - previous.z,
                   ) * inchesPerModelUnitRef.current,
+                wholeInchSnap: Boolean(
+                  "wholeInchSnap" in candidate && candidate.wholeInchSnap,
+                ),
               });
             }
           } else {
@@ -3170,7 +3177,9 @@ export default function PointCloudViewport({
             top: segmentLengthHud.clientY + 14,
           }}
         >
-          {segmentLengthHud.inches.toFixed(2)} in
+          {segmentLengthHud.wholeInchSnap
+            ? `${Math.round(segmentLengthHud.inches)} in · WHOLE-INCH SNAP`
+            : `${segmentLengthHud.inches.toFixed(2)} in`}
         </div>
       )}
     </div>
