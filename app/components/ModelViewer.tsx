@@ -25,8 +25,11 @@ import {
 import {
   generateRebarInstances,
   pointAlongRebarPath,
-  rebarInstanceLength,
 } from "../lib/rebarAdvanced";
+import {
+  buildRebarScheduleWorkbookXml,
+  createRebarScheduleRows,
+} from "../lib/rebarSchedule";
 import {
   applyStandardBendsToInstance,
   CRSI_REBAR_BEND_STANDARDS,
@@ -2331,7 +2334,7 @@ export default function ModelViewer() {
     }
   }
 
-  const bentInstancesForRun = (run: RebarRun) => {
+  const sharpInstancesForRun = (run: RebarRun) => {
     if (!inchesPerModelUnit) return [];
     const sourcePlane = rebarPlanes.find(
       (plane) => plane.id === run.planeId,
@@ -2373,7 +2376,12 @@ export default function ModelViewer() {
       lapOffsetModelUnits: run.lapOffsetInches
         ? run.lapOffsetInches / inchesPerModelUnit
         : 0,
-    }).map((instance) =>
+    });
+  };
+
+  const bentInstancesForRun = (run: RebarRun) => {
+    if (!inchesPerModelUnit) return [];
+    return sharpInstancesForRun(run).map((instance) =>
       applyStandardBendsToInstance(
         instance,
         run.barNumber,
@@ -2496,126 +2504,29 @@ export default function ModelViewer() {
 
   const exportRebarQuantities = () => {
     if (!inchesPerModelUnit || !rebarRuns.length) return;
-    const escapeXml = (value: string) =>
-      value
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
-    const rows = rebarRuns.map((run) => {
-      const sourcePlane = rebarPlanes.find(
-        (plane) => plane.id === run.planeId,
-      );
-      const targetPlane = rebarPlanes.find(
-        (plane) => plane.id === run.advanced?.splay?.targetPlaneId,
-      );
-      const targetNormal = targetPlane
-        ? normalize(
-            reframeDirection(targetPlane.objectNormal, null, basis),
-          )
-        : null;
-      const targetBaseOrigin = targetPlane
-        ? reframePoint(targetPlane.objectOrigin, null, basis)
-        : null;
-      const sourceNormal = sourcePlane
-        ? normalize(
-            reframeDirection(sourcePlane.objectNormal, null, basis),
-          )
-        : null;
-      const sourceBaseOrigin = sourcePlane
-        ? reframePoint(sourcePlane.objectOrigin, null, basis)
-        : null;
-      const lengthsFeet = generateRebarInstances(run, {
-        sourceNormal,
-        sourceOrigin:
-          sourceBaseOrigin && sourceNormal
-            ? addScaled(
-                sourceBaseOrigin,
-                sourceNormal,
-                run.startOffset ?? run.start,
-              )
-            : null,
-        targetNormal,
-        targetOrigin:
-          targetBaseOrigin && targetNormal
-            ? addScaled(
-                targetBaseOrigin,
-                targetNormal,
-                run.advanced?.splay?.targetOffset ?? 0,
-              )
-            : null,
-        lapOffsetModelUnits: run.lapOffsetInches
-          ? run.lapOffsetInches / inchesPerModelUnit
-          : 0,
-      }).map((instance) => {
-        const bentInstance = applyStandardBendsToInstance(
-          instance,
-          run.barNumber,
-          inchesPerModelUnit,
-        );
-        return (rebarInstanceLength(bentInstance) * inchesPerModelUnit) / 12;
-      });
-      const totalFeet = lengthsFeet.reduce(
-        (total, lengthFeet) => total + lengthFeet,
-        0,
-      );
-      const averageLengthFeet =
-        lengthsFeet.length > 0 ? totalFeet / lengthsFeet.length : 0;
-      return {
-        name: run.name,
-        tags: [
-          run.advanced?.variableLength ? "Varying" : null,
-          run.advanced?.splay ? "Splayed" : null,
-        ]
-          .filter(Boolean)
-          .join(", "),
-        quantity: run.positions.length,
-        barNumber: run.barNumber ?? "5",
-        lengthFeet: averageLengthFeet,
-        minimumLengthFeet: lengthsFeet.length
-          ? Math.min(...lengthsFeet)
-          : 0,
-        maximumLengthFeet: lengthsFeet.length
-          ? Math.max(...lengthsFeet)
-          : 0,
-        totalFeet,
-      };
-    });
-    const totals = new Map<string, number>();
-    rows.forEach((row) =>
-      totals.set(
-        row.barNumber,
-        (totals.get(row.barNumber) ?? 0) + row.totalFeet,
-      ),
+    const scheduleRows = createRebarScheduleRows(
+      rebarRuns.map((run) => {
+        const sharpInstances = sharpInstancesForRun(run);
+        return {
+          run,
+          sharpInstances,
+          bentInstances: sharpInstances.map((instance) =>
+            applyStandardBendsToInstance(
+              instance,
+              run.barNumber,
+              inchesPerModelUnit,
+            ),
+          ),
+        };
+      }),
+      inchesPerModelUnit,
     );
-    const cell = (type: "String" | "Number", value: string | number) =>
-      `<Cell><Data ss:Type="${type}">${type === "String" ? escapeXml(String(value)) : value}</Data></Cell>`;
-    const header = (values: string[]) =>
-      `<Row ss:StyleID="Header">${values.map((value) => cell("String", value)).join("")}</Row>`;
-    const scheduleRows = rows
-      .map(
-        (row) =>
-          `<Row>${cell("String", row.name)}${cell("String", row.tags)}${cell("Number", row.quantity)}${cell("String", `#${row.barNumber}`)}${cell("Number", Number(row.lengthFeet.toFixed(3)))}${cell("Number", Number(row.minimumLengthFeet.toFixed(3)))}${cell("Number", Number(row.maximumLengthFeet.toFixed(3)))}${cell("Number", Number(row.totalFeet.toFixed(3)))}</Row>`,
-      )
-      .join("");
-    const totalRows = [...totals.entries()]
-      .sort(([a], [b]) => Number(a) - Number(b))
-      .map(
-        ([barNumber, total]) =>
-          `<Row>${cell("String", `#${barNumber}`)}${cell("Number", Number(total.toFixed(3)))}</Row>`,
-      )
-      .join("");
-    const workbook = `<?xml version="1.0"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-<Styles><Style ss:ID="Default"><Alignment ss:Vertical="Center"/><Font ss:FontName="Aptos" ss:Size="10"/></Style><Style ss:ID="Header"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#155E75" ss:Pattern="Solid"/></Style></Styles>
-<Worksheet ss:Name="Bar Schedule"><Table><Column ss:Width="180"/><Column ss:Width="75"/><Column ss:Width="65"/><Column ss:Width="65"/><Column ss:Width="95"/><Column ss:Width="90"/><Column ss:Width="90"/><Column ss:Width="95"/>${header(["Bar Name", "Tags", "Quantity", "Bar Number", "Average Length (ft)", "Minimum Length (ft)", "Maximum Length (ft)", "Total Length (ft)"])}${scheduleRows}</Table></Worksheet>
-<Worksheet ss:Name="Totals by Bar Number"><Table><Column ss:Width="100"/><Column ss:Width="140"/>${header(["Bar Number", "Total Length (ft)"])}${totalRows}</Table></Worksheet>
-</Workbook>`;
+    const workbook = buildRebarScheduleWorkbookXml(scheduleRows, fileName);
     downloadBlob(
       new Blob([workbook], { type: "application/vnd.ms-excel" }),
-      `${fileName.replace(/\.[^.]+$/, "") || "rebar"}-quantities.xls`,
+      `${fileName.replace(/\.[^.]+$/, "") || "rebar"}-bar-schedule.xls`,
     );
-    setStatus("Excel rebar quantity workbook exported.");
+    setStatus("NHDOT-style Excel bar schedule and quantities exported.");
   };
 
   const commitDraftFace = useCallback(() => {
