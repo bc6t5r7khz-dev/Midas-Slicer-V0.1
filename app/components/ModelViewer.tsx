@@ -611,6 +611,9 @@ export default function ModelViewer() {
   const [flipSliceSection, setFlipSliceSection] = useState(true);
   const [slicePins, setSlicePins] = useState<SlicePin[]>([]);
   const [detailNoteDraft, setDetailNoteDraft] = useState("");
+  const [pendingDetailNoteText, setPendingDetailNoteText] = useState<
+    string | null
+  >(null);
   const [selectedSlicePinId, setSelectedSlicePinId] =
     useState<string | null>(null);
   const [selectedSlicePinIds, setSelectedSlicePinIds] = useState<Set<string>>(
@@ -741,6 +744,10 @@ export default function ModelViewer() {
     const timer = window.setTimeout(() => setRenderSlice(slice), 55);
     return () => window.clearTimeout(timer);
   }, [slice]);
+
+  useEffect(() => {
+    if (activeTab !== "details") setPendingDetailNoteText(null);
+  }, [activeTab]);
 
   const tolerance = globalBounds ? modelTolerance(globalBounds) : 1e-6;
   const elementSkin = useMemo(
@@ -1052,6 +1059,12 @@ export default function ModelViewer() {
   };
   const updateDetailNotes = (notes: DetailNote[]) => {
     updateActiveDetail((current) => ({ ...current, notes }));
+  };
+  const beginDetailNotePlacement = () => {
+    const text = detailNoteDraft.trim();
+    if (!text) return;
+    setPendingDetailNoteText(text);
+    setDetailNoteDraft("");
   };
   const activeCustomSlice = useMemo(() => {
     if (
@@ -7727,8 +7740,8 @@ export default function ModelViewer() {
                 <section className="details-card">
                   <strong>{activeSlicePin.name}</strong>
                   <p>
-                    Drag labels, leader elbows, arrow points, and dimensions in
-                    the drawing. Yellow handles identify editable points.
+                    Drag labels, leader landings, arrow points, and dimensions
+                    in the drawing. Yellow handles identify editable points.
                   </p>
                 </section>
                 <section className="details-card">
@@ -7741,43 +7754,23 @@ export default function ModelViewer() {
                       onChange={(event) => setDetailNoteDraft(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key !== "Enter") return;
-                        const text = detailNoteDraft.trim();
-                        if (!text) return;
-                        updateDetailNotes([
-                          ...activeDetail.notes,
-                          {
-                            id: `detail-note-${crypto.randomUUID()}`,
-                            text,
-                            target: { x: 0.5, y: 0.5 },
-                            leader: { x: 0.58, y: 0.34 },
-                            label: { x: 0.68, y: 0.34 },
-                          },
-                        ]);
-                        setDetailNoteDraft("");
+                        beginDetailNotePlacement();
                       }}
                     />
                     <button
                       className="button compact"
                       disabled={!detailNoteDraft.trim()}
-                      onClick={() => {
-                        const text = detailNoteDraft.trim();
-                        if (!text) return;
-                        updateDetailNotes([
-                          ...activeDetail.notes,
-                          {
-                            id: `detail-note-${crypto.randomUUID()}`,
-                            text,
-                            target: { x: 0.5, y: 0.5 },
-                            leader: { x: 0.58, y: 0.34 },
-                            label: { x: 0.68, y: 0.34 },
-                          },
-                        ]);
-                        setDetailNoteDraft("");
-                      }}
+                      onClick={beginDetailNotePlacement}
                     >
-                      Add Note
+                      Place Note
                     </button>
                   </div>
+                  {pendingDetailNoteText && (
+                    <p className="detail-note-placement-help">
+                      Move into the drawing and click the arrow location. Press
+                      Escape to cancel.
+                    </p>
+                  )}
                   {activeDetail.notes.map((note) => (
                     <div className="detail-note-entry" key={note.id}>
                       <span>{note.text}</span>
@@ -7966,8 +7959,14 @@ export default function ModelViewer() {
           detailMode={activeTab === "details"}
           detailRunAdjustments={activeDetail.runAdjustments}
           detailNotes={activeDetail.notes}
+          pendingDetailNoteText={pendingDetailNoteText}
           onDetailRunAdjustment={updateDetailRunAdjustment}
           onDetailNotesChange={updateDetailNotes}
+          onPlaceDetailNote={(note) => {
+            updateDetailNotes([...activeDetail.notes, note]);
+            setPendingDetailNoteText(null);
+          }}
+          onCancelDetailNote={() => setPendingDetailNoteText(null)}
           sectionViewRequest={sectionViewRequest}
           rebarSection={
             advancedAnchorSection !== null

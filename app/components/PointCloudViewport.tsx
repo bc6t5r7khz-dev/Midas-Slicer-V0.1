@@ -145,11 +145,14 @@ type Props = {
   detailMode: boolean;
   detailRunAdjustments: Record<string, DetailRunAdjustment>;
   detailNotes: DetailNote[];
+  pendingDetailNoteText: string | null;
   onDetailRunAdjustment: (
     runId: string,
     adjustment: DetailRunAdjustment,
   ) => void;
   onDetailNotesChange: (notes: DetailNote[]) => void;
+  onPlaceDetailNote: (note: DetailNote) => void;
+  onCancelDetailNote: () => void;
   sectionViewRequest: {
     id: string;
     nonce: number;
@@ -362,7 +365,7 @@ function createTextSprite(text: string) {
 
 type CellFace = {
   vertices: Vec3[];
-  cap: boolean;
+  cap: number | null;
 };
 
 type ClipPlane = {
@@ -404,6 +407,7 @@ function clipCellFaces(
   faces: CellFace[],
   plane: ClipPlane,
   epsilon: number,
+  planeIndex: number,
 ): CellFace[] {
   const clipped: CellFace[] = [];
   const capPoints: Vec3[] = [];
@@ -483,7 +487,7 @@ function clipCellFaces(
         (b.z - center.z) * v.z;
       return Math.atan2(ay, ax) - Math.atan2(by, bx);
     });
-    clipped.push({ vertices: unique, cap: true });
+    clipped.push({ vertices: unique, cap: planeIndex });
   }
   return clipped;
 }
@@ -515,6 +519,7 @@ function clippedSolidBuffers(
   const epsilon = span * 1e-8;
   const positions: number[] = [];
   const capPositions: number[] = [];
+  const customCapPositions: number[] = [];
 
   for (const element of elements) {
     if (element.type !== "SOLID") continue;
@@ -526,10 +531,10 @@ function clippedSolidBuffers(
     if (sourceVertices.some((point) => !point)) continue;
     let faces: CellFace[] = solidFaces(element.nodeIds.length).map((indices) => ({
       vertices: indices.map((index) => sourceVertices[index] as Vec3),
-      cap: false,
+      cap: null,
     }));
-    for (const plane of planes) {
-      faces = clipCellFaces(faces, plane, epsilon);
+    for (let planeIndex = 0; planeIndex < planes.length; planeIndex += 1) {
+      faces = clipCellFaces(faces, planes[planeIndex], epsilon, planeIndex);
       if (!faces.length) break;
     }
 
@@ -543,13 +548,44 @@ function clippedSolidBuffers(
         [displayed[0], displayed[index], displayed[index + 1]].forEach(
           (point) => {
             positions.push(point.x, point.y, point.z);
-            if (face.cap) capPositions.push(point.x, point.y, point.z);
+            if (face.cap !== null) capPositions.push(point.x, point.y, point.z);
+            if (customPlane && face.cap === planes.length - 1) {
+              customCapPositions.push(point.x, point.y, point.z);
+            }
           },
         );
       }
     }
   }
-  return { positions, capPositions };
+  return { positions, capPositions, customCapPositions };
+}
+
+function triangleBoundaryPositions(positions: number[], tolerance: number) {
+  type Edge = { start: number[]; end: number[]; count: number };
+  const edges = new Map<string, Edge>();
+  const epsilon = Math.max(tolerance, 1e-8);
+  const pointKey = (point: number[]) =>
+    point.map((value) => Math.round(value / epsilon)).join(",");
+  for (let index = 0; index < positions.length; index += 9) {
+    const triangle = [0, 3, 6].map((offset) =>
+      positions.slice(index + offset, index + offset + 3),
+    );
+    for (let edgeIndex = 0; edgeIndex < 3; edgeIndex += 1) {
+      const start = triangle[edgeIndex];
+      const end = triangle[(edgeIndex + 1) % 3];
+      const startKey = pointKey(start);
+      const endKey = pointKey(end);
+      const key = startKey < endKey
+        ? `${startKey}|${endKey}`
+        : `${endKey}|${startKey}`;
+      const existing = edges.get(key);
+      if (existing) existing.count += 1;
+      else edges.set(key, { start, end, count: 1 });
+    }
+  }
+  return [...edges.values()]
+    .filter(({ count }) => count === 1)
+    .flatMap(({ start, end }) => [...start, ...end]);
 }
 
 function clipSurfacePolygon(
@@ -712,8 +748,11 @@ export default function PointCloudViewport({
   detailMode,
   detailRunAdjustments,
   detailNotes,
+  pendingDetailNoteText,
   onDetailRunAdjustment,
   onDetailNotesChange,
+  onPlaceDetailNote,
+  onCancelDetailNote,
   sectionViewRequest,
   inchesPerModelUnit,
   showConcreteSkin,
@@ -781,6 +820,26 @@ export default function PointCloudViewport({
     wholeInchSnap: boolean;
   } | null>(null);
   const [detailProjectionRevision, setDetailProjectionRevision] = useState(0);
+  const [detailNoteCursor, setDetailNoteCursor] = useState<ScreenPoint | null>(
+    null,
+  );
+
+const addVec = (first: Vec3, second: Vec3): Vec3 => ({
+  x: first.x + second.x,
+  y: first.y + second.y,
+  z: first.z + second.z,
+});
+const subtractVec = (first: Vec3, second: Vec3): Vec3 => ({
+  x: first.x - second.x,
+  y: first.y - second.y,
+  z: first.z - second.z,
+});
+const scaleVec = (value: Vec3, amount: number): Vec3 => ({
+  x: value.x * amount,
+  y: value.y * amount,
+  z: value.z * amount,
+});
+const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
   const [detailDrag, setDetailDrag] = useState<DetailDrag | null>(null);
 
   nodesRef.current = nodes;
@@ -2084,13 +2143,37 @@ export default function PointCloudViewport({
         circles: [],
         lapDimensions: [],
       };
-      for (const instance of generatedRebarInstances.get(run.id) ?? []) {
-        const section = sectionRebarGeometry(
-          instance,
-          rebarSectionView.origin,
-          rebarSectionView.normal,
-          rebarSectionView.throwDepthModelUnits,
-        );
+      const candidates = (generatedRebarInstances.get(run.id) ?? []).map(
+        (instance) => {
+          const points = instance.flatMap((line) => line.points);
+          const signedDistances = points.map((point) =>
+            dot(subtractVec(point, rebarSectionView.origin), rebarSectionView.normal),
+          );
+          const closestSignedDistance = signedDistances.reduce(
+            (closest, distance) =>
+              Math.abs(distance) < Math.abs(closest) ? distance : closest,
+            signedDistances[0] ?? 0,
+          );
+          const sectionNormal =
+            closestSignedDistance > 0
+              ? scaleVec(rebarSectionView.normal, -1)
+              : rebarSectionView.normal;
+          return {
+            distance: Math.abs(closestSignedDistance),
+            section: sectionRebarGeometry(
+              instance,
+              rebarSectionView.origin,
+              sectionNormal,
+              rebarSectionView.throwDepthModelUnits,
+            ),
+          };
+        },
+      );
+      const lineCandidate = candidates
+        .filter(({ section }) => section.projectedLines.length)
+        .sort((first, second) => first.distance - second.distance)[0];
+      const visibleCandidates = lineCandidate ? [lineCandidate] : candidates;
+      for (const { section } of visibleCandidates) {
         section.projectedLines.forEach(({ start, end }) =>
           graphic.segments.push([start, end]),
         );
@@ -2138,6 +2221,53 @@ export default function PointCloudViewport({
         segments: offset.segments.map(({ start, end }) => [start, end]),
         lapDimensions: offset.lapDimensions,
       });
+    }
+
+    const segmentOwners = [...result.entries()].flatMap(([runId, graphic]) =>
+      graphic.segments.map((segment) => ({ runId, segment })),
+    );
+    for (const run of rebarRuns) {
+      const graphic = result.get(run.id);
+      if (!graphic?.circles.length) continue;
+      const diameter = rebarBendStandard(run.barNumber).diameterInches;
+      const shifted = graphic.circles.map((circle) => {
+        let next = circle;
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const collision = segmentOwners.find(({ runId, segment }) => {
+            if (runId === run.id) return false;
+            const delta = subtractVec(segment[1], segment[0]);
+            const denominator = dot(delta, delta) || 1;
+            const amount = Math.max(
+              0,
+              Math.min(1, dot(subtractVec(next, segment[0]), delta) / denominator),
+            );
+            const closest = addVec(segment[0], scaleVec(delta, amount));
+            const otherRun = rebarRuns.find((candidate) => candidate.id === runId);
+            const otherDiameter = rebarBendStandard(
+              otherRun?.barNumber ?? run.barNumber,
+            ).diameterInches;
+            const clearance =
+              (diameter + otherDiameter) / (2 * inchesPerModelUnit) +
+              0.125 / inchesPerModelUnit;
+            return lengthVec(subtractVec(next, closest)) < clearance;
+          });
+          if (!collision) break;
+          const inwardRaw = subtractVec(center, next);
+          const inwardNormalAmount = dot(inwardRaw, rebarSectionView.normal);
+          const inward = normalize(
+            subtractVec(
+              inwardRaw,
+              scaleVec(rebarSectionView.normal, inwardNormalAmount),
+            ),
+          );
+          next = addVec(
+            next,
+            scaleVec(inward, (diameter + 0.125) / inchesPerModelUnit),
+          );
+        }
+        return next;
+      });
+      result.set(run.id, { ...graphic, circles: shifted });
     }
     return result;
   }, [
@@ -2316,13 +2446,16 @@ export default function PointCloudViewport({
         displayOffset,
         displayCustomClipPlane,
       );
+      const renderPositions = detailMode
+        ? buffers.customCapPositions
+        : buffers.positions;
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute(
         "position",
-        new THREE.Float32BufferAttribute(buffers.positions, 3),
+        new THREE.Float32BufferAttribute(renderPositions, 3),
       );
       geometry.computeVertexNormals();
-      if (!lineOnly) {
+      if (!lineOnly && renderPositions.length) {
         const mesh = new THREE.Mesh(
           geometry,
           new THREE.MeshBasicMaterial({
@@ -2334,8 +2467,32 @@ export default function PointCloudViewport({
           }),
         );
         state.elementGroup.add(mesh);
-      } else {
+      } else if (!renderPositions.length) {
         geometry.dispose();
+      }
+
+      if (detailMode) {
+        const boundary = triangleBoundaryPositions(
+          buffers.customCapPositions,
+          Math.max(tolerance * 10, 1e-7),
+        );
+        if (boundary.length) {
+          const cutGeometry = new LineSegmentsGeometry();
+          cutGeometry.setPositions(boundary);
+          const cutMaterial = new LineMaterial({
+            color: 0x05090c,
+            linewidth: 2.5,
+            resolution: new THREE.Vector2(
+              state.renderer.domElement.clientWidth,
+              state.renderer.domElement.clientHeight,
+            ),
+          });
+          const outline = new LineSegments2(cutGeometry, cutMaterial);
+          outline.computeLineDistances();
+          state.elementGroup.add(outline);
+        }
+        if (lineOnly && renderPositions.length) geometry.dispose();
+        return;
       }
 
       const exteriorGeometry = new THREE.BufferGeometry();
@@ -2535,7 +2692,7 @@ export default function PointCloudViewport({
       new THREE.Float32BufferAttribute(triangleColors, 3),
     );
     meshGeometry.computeVertexNormals();
-    if (!lineOnly) {
+    if (!lineOnly && !detailMode) {
       const elementMesh = new THREE.Mesh(
         meshGeometry,
         new THREE.MeshBasicMaterial({
@@ -2557,7 +2714,22 @@ export default function PointCloudViewport({
       state.elementGroup.add(elementMesh);
     }
 
-    if (lineOnly) {
+    if (detailMode) {
+      meshGeometry.dispose();
+      if (cutEdgePositions.length) {
+        const cutGeometry = new THREE.BufferGeometry();
+        cutGeometry.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(cutEdgePositions, 3),
+        );
+        state.elementGroup.add(
+          new THREE.LineSegments(
+            cutGeometry,
+            new THREE.LineBasicMaterial({ color: 0x05090c }),
+          ),
+        );
+      }
+    } else if (lineOnly) {
       const outlineGeometry = new THREE.EdgesGeometry(meshGeometry, 25);
       if (outlineGeometry.getAttribute("position").count) {
         state.elementGroup.add(
@@ -2622,9 +2794,11 @@ export default function PointCloudViewport({
     displayCustomClipPlane,
     showConcreteSkin,
     lineAndBar,
+    detailMode,
     slice,
     sliceBounds,
     slicingMode,
+    tolerance,
     volumeConfirmed,
   ]);
 
@@ -3469,12 +3643,13 @@ export default function PointCloudViewport({
   const handleDetailPointerMove = (
     event: ReactPointerEvent<SVGSVGElement>,
   ) => {
-    if (!detailDrag) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const point = {
       x: event.clientX - rect.left,
       y: event.clientY - rect.top,
     };
+    if (pendingDetailNoteText) setDetailNoteCursor(point);
+    if (!detailDrag) return;
     if (detailDrag.kind === "run-target") {
       const graphic = detailScreenGraphics.find(
         (candidate) => candidate.run.id === detailDrag.id,
@@ -3498,17 +3673,10 @@ export default function PointCloudViewport({
     ) {
       const initial = detailDrag.initial;
       const next = { ...initial };
-      if (detailDrag.kind === "run-label") {
-        next.labelOffset = {
-          x: (initial.labelOffset?.x ?? 54) + dx,
-          y: (initial.labelOffset?.y ?? -22) + dy,
-        };
-      } else {
-        next.leaderOffset = {
-          x: (initial.leaderOffset?.x ?? 22) + dx,
-          y: (initial.leaderOffset?.y ?? -22) + dy,
-        };
-      }
+      next.labelOffset = {
+        x: (initial.labelOffset?.x ?? 54) + dx,
+        y: (initial.labelOffset?.y ?? -22) + dy,
+      };
       onDetailRunAdjustment(detailDrag.id, next);
       return;
     }
@@ -3564,9 +3732,27 @@ export default function PointCloudViewport({
           x: (initial.leader.x * rect.width + dx) / rect.width,
           y: (initial.leader.y * rect.height + dy) / rect.height,
         },
+        label: {
+          x: (initial.label.x * rect.width + dx) / rect.width,
+          y: (initial.label.y * rect.height + dy) / rect.height,
+        },
       });
     }
   };
+
+  useEffect(() => {
+    if (!pendingDetailNoteText) {
+      setDetailNoteCursor(null);
+      return;
+    }
+    const cancel = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      onCancelDetailNote();
+      setDetailNoteCursor(null);
+    };
+    window.addEventListener("keydown", cancel);
+    return () => window.removeEventListener("keydown", cancel);
+  }, [onCancelDetailNote, pendingDetailNoteText]);
 
   if (renderError) {
     return (
@@ -3586,9 +3772,36 @@ export default function PointCloudViewport({
     <div ref={hostRef} className="viewport-canvas" aria-label="3D node cloud">
       {detailMode && rebarSectionView && (
         <svg
-          className="detail-annotation-layer"
+          className={`detail-annotation-layer${
+            pendingDetailNoteText ? " placing-note" : ""
+          }`}
           aria-label="Editable reinforcing detail annotations"
           onPointerMove={handleDetailPointerMove}
+          onPointerDown={(event) => {
+            if (!pendingDetailNoteText || event.target !== event.currentTarget) {
+              return;
+            }
+            event.preventDefault();
+            const rect = event.currentTarget.getBoundingClientRect();
+            const target = {
+              x: event.clientX - rect.left,
+              y: event.clientY - rect.top,
+            };
+            onPlaceDetailNote({
+              id: `detail-note-${crypto.randomUUID()}`,
+              text: pendingDetailNoteText,
+              target: { x: target.x / rect.width, y: target.y / rect.height },
+              leader: {
+                x: Math.min(0.98, (target.x + 46) / rect.width),
+                y: Math.max(0.02, (target.y - 38) / rect.height),
+              },
+              label: {
+                x: Math.min(0.98, (target.x + 104) / rect.width),
+                y: Math.max(0.02, (target.y - 38) / rect.height),
+              },
+            });
+            setDetailNoteCursor(null);
+          }}
           onPointerUp={() => setDetailDrag(null)}
           onPointerCancel={() => setDetailDrag(null)}
         >
@@ -3706,24 +3919,35 @@ export default function PointCloudViewport({
                 (targetSegment[1].y - targetSegment[0].y) *
                   targetDefinition.fraction,
             };
-            const leader = {
-              x: target.x + (adjustment.leaderOffset?.x ?? 22),
-              y: target.y + (adjustment.leaderOffset?.y ?? -22),
-            };
             const textPoint = {
               x: target.x + (adjustment.labelOffset?.x ?? 54),
               y: target.y + (adjustment.labelOffset?.y ?? -22),
             };
+            const textDirection = textPoint.x >= target.x ? 1 : -1;
+            const textAnchor = textDirection > 0 ? "start" : "end";
+            const landingEnd = {
+              x: textPoint.x - textDirection * 6,
+              y: textPoint.y,
+            };
+            const leader = {
+              x:
+                landingEnd.x -
+                textDirection *
+                  Math.max(24, Math.abs(adjustment.leaderOffset?.x ?? 26)),
+              y: textPoint.y,
+            };
             return (
               <g key={graphic.run.id} className="detail-leader">
                 <polyline
-                  points={`${target.x},${target.y} ${leader.x},${leader.y} ${textPoint.x},${textPoint.y}`}
+                  points={`${target.x},${target.y} ${leader.x},${leader.y} ${landingEnd.x},${landingEnd.y}`}
                   markerStart="url(#detail-arrow)"
                 />
                 <text
                   className="annotation-draggable"
                   x={textPoint.x}
-                  y={textPoint.y - 5}
+                  y={textPoint.y}
+                  textAnchor={textAnchor}
+                  dominantBaseline="middle"
                   onPointerDown={(event) => {
                     event.stopPropagation();
                     event.currentTarget.setPointerCapture(event.pointerId);
@@ -3823,18 +4047,29 @@ export default function PointCloudViewport({
             const width = Math.max(host?.clientWidth ?? 1, 1);
             const height = Math.max(host?.clientHeight ?? 1, 1);
             const target = { x: note.target.x * width, y: note.target.y * height };
-            const leader = { x: note.leader.x * width, y: note.leader.y * height };
             const label = { x: note.label.x * width, y: note.label.y * height };
+            const textDirection = label.x >= target.x ? 1 : -1;
+            const textAnchor = textDirection > 0 ? "start" : "end";
+            const landingEnd = {
+              x: label.x - textDirection * 6,
+              y: label.y,
+            };
+            const leader = {
+              x: note.leader.x * width,
+              y: label.y,
+            };
             return (
               <g key={note.id} className="detail-leader custom-detail-note">
                 <polyline
-                  points={`${target.x},${target.y} ${leader.x},${leader.y} ${label.x},${label.y}`}
+                  points={`${target.x},${target.y} ${leader.x},${leader.y} ${landingEnd.x},${landingEnd.y}`}
                   markerStart="url(#detail-arrow)"
                 />
                 <text
                   className="annotation-draggable"
                   x={label.x}
-                  y={label.y - 5}
+                  y={label.y}
+                  textAnchor={textAnchor}
+                  dominantBaseline="middle"
                   onPointerDown={(event) => {
                     event.stopPropagation();
                     event.currentTarget.setPointerCapture(event.pointerId);
@@ -3883,6 +4118,23 @@ export default function PointCloudViewport({
               </g>
             );
           })}
+          {pendingDetailNoteText && detailNoteCursor && (() => {
+            const target = detailNoteCursor;
+            const label = { x: target.x + 104, y: target.y - 38 };
+            const leader = { x: target.x + 46, y: label.y };
+            const landingEnd = { x: label.x - 6, y: label.y };
+            return (
+              <g className="detail-leader pending-detail-note" aria-hidden="true">
+                <polyline
+                  points={`${target.x},${target.y} ${leader.x},${leader.y} ${landingEnd.x},${landingEnd.y}`}
+                  markerStart="url(#detail-arrow)"
+                />
+                <text x={label.x} y={label.y} dominantBaseline="middle">
+                  {pendingDetailNoteText}
+                </text>
+              </g>
+            );
+          })()}
         </svg>
       )}
       {segmentLengthHud && (

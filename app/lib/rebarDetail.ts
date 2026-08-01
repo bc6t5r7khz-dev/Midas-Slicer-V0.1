@@ -7,6 +7,67 @@ export type LapDimension = {
   lengthModelUnits: number;
 };
 
+export function mergeLapDimensions(
+  dimensions: LapDimension[],
+  joinTolerance: number,
+) {
+  const pending = [...dimensions];
+  const merged: LapDimension[] = [];
+  const epsilon = Math.max(joinTolerance, 1e-8);
+
+  while (pending.length) {
+    const seed = pending.shift()!;
+    const seedDelta = subtract(seed.end, seed.start);
+    const seedLength = length(seedDelta);
+    if (seedLength <= epsilon) continue;
+    const direction = scale(seedDelta, 1 / seedLength);
+    let minimum = 0;
+    let maximum = seedLength;
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+      for (let index = pending.length - 1; index >= 0; index -= 1) {
+        const candidate = pending[index];
+        const candidateDelta = subtract(candidate.end, candidate.start);
+        const candidateLength = length(candidateDelta);
+        if (candidateLength <= epsilon) continue;
+        const candidateDirection = scale(candidateDelta, 1 / candidateLength);
+        if (Math.abs(dot(direction, candidateDirection)) < 0.995) continue;
+        const offsets = [candidate.start, candidate.end].map((point) => {
+          const relative = subtract(point, seed.start);
+          const along = dot(relative, direction);
+          const away = length(subtract(relative, scale(direction, along)));
+          return { along, away };
+        });
+        if (Math.max(...offsets.map(({ away }) => away)) > epsilon) continue;
+        const candidateMinimum = Math.min(...offsets.map(({ along }) => along));
+        const candidateMaximum = Math.max(...offsets.map(({ along }) => along));
+        if (
+          candidateMaximum < minimum - epsilon ||
+          candidateMinimum > maximum + epsilon
+        ) {
+          continue;
+        }
+        minimum = Math.min(minimum, candidateMinimum);
+        maximum = Math.max(maximum, candidateMaximum);
+        pending.splice(index, 1);
+        changed = true;
+      }
+    }
+
+    const start = add(seed.start, scale(direction, minimum));
+    const end = add(seed.start, scale(direction, maximum));
+    merged.push({
+      start,
+      end,
+      lengthModelUnits: length(subtract(end, start)),
+    });
+  }
+
+  return merged;
+}
+
 const add = (a: Vec3, b: Vec3): Vec3 => ({
   x: a.x + b.x,
   y: a.y + b.y,
@@ -129,5 +190,11 @@ export function offsetLappedSectionSegments(
     });
   }
 
-  return { segments, lapDimensions };
+  return {
+    segments,
+    lapDimensions: mergeLapDimensions(
+      lapDimensions,
+      Math.max(offsetDistance * 1.5, epsilon * 10),
+    ),
+  };
 }

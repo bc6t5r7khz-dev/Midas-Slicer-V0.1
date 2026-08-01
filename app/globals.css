@@ -3720,6 +3720,23 @@ input[type="range"]::-moz-range-thumb {
   pointer-events: none;
 }
 
+.detail-annotation-layer.placing-note {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+.pending-detail-note {
+  pointer-events: none;
+  opacity: 0.82;
+}
+
+.detail-note-placement-help {
+  margin: 7px 0 0;
+  color: #287a42;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
 .detail-annotation-layer line,
 .detail-annotation-layer polyline {
   fill: none;

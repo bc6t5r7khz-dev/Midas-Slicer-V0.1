@@ -57,3 +57,21 @@ test("leaves a non-overlapping lapped segment on its true centerline", () => {
   assert.equal(result.lapDimensions.length, 0);
   assert.deepEqual(JSON.parse(JSON.stringify(result.segments)), [original]);
 });
+
+test("combines adjacent straight lap segments into one overall dimension", () => {
+  const result = offsetLappedSectionSegments(
+    [
+      { start: { x: 0, y: 0, z: 0 }, end: { x: 5, y: 0, z: 0 } },
+      { start: { x: 5, y: 0, z: 0 }, end: { x: 10, y: 0, z: 0 } },
+    ],
+    [{ start: { x: 3, y: 0, z: 0 }, end: { x: 8, y: 0, z: 0 } }],
+    { x: 0, y: 0, z: 1 },
+    { x: 5, y: 5, z: 0 },
+    1,
+    1e-6,
+  );
+  assert.equal(result.lapDimensions.length, 1);
+  assert.equal(result.lapDimensions[0].lengthModelUnits, 5);
+  assert.equal(result.lapDimensions[0].start.x, 3);
+  assert.equal(result.lapDimensions[0].end.x, 8);
+});
