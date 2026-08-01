@@ -3044,7 +3044,7 @@ input[type="range"]::-moz-range-thumb {
 
 /* V45 consolidated setup, slicing, and list interactions */
 .workflow-tabs {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .workflow-tabs button:disabled {
@@ -3648,6 +3648,109 @@ input[type="range"]::-moz-range-thumb {
   width: 100%;
   min-height: 32px;
   margin: 0;
+}
+
+.details-content {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+}
+
+.details-content h2,
+.details-content h3 {
+  margin: 0;
+}
+
+.details-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #111;
+  background: #fff;
+}
+
+.details-card p {
+  margin: 0;
+  color: #59646a;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.detail-note-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 5px 7px;
+  border: 1px solid #d5d8d9;
+  color: #111;
+  background: #fff;
+}
+
+.detail-note-entry button {
+  border: 0;
+  color: #b3261e;
+  background: transparent;
+  cursor: pointer;
+}
+
+.detail-note-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.detail-note-form input {
+  min-width: 0;
+  border: 1px solid #111;
+  padding: 7px;
+  color: #111;
+  background: #fff;
+}
+
+.detail-annotation-layer {
+  position: absolute;
+  z-index: 28;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.detail-annotation-layer line,
+.detail-annotation-layer polyline {
+  fill: none;
+  stroke: #111;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.detail-annotation-layer text {
+  fill: #111;
+  stroke: #fff;
+  stroke-width: 4px;
+  paint-order: stroke;
+  font: 700 12px/1 var(--mono);
+}
+
+.detail-annotation-layer .annotation-draggable {
+  pointer-events: auto;
+  cursor: move;
+}
+
+.detail-handle {
+  fill: #ffbf47;
+  stroke: #111;
+  stroke-width: 1px;
+  opacity: 0.2;
+}
+
+.detail-leader:hover .detail-handle,
+.detail-handle:hover {
+  opacity: 1;
 }
 
 .saved-view-ribbon button:hover:not(.active) {

@@ -54,6 +54,8 @@ import type {
   Axis,
   Bounds,
   CameraViewpoint,
+  DetailNote,
+  DetailRunAdjustment,
   LocalBasis,
   ModelElement,
   RebarLine,
@@ -129,6 +131,7 @@ const TABS: Array<{ id: WorkflowTab; label: string }> = [
   { id: "setup", label: "Setup" },
   { id: "slicing", label: "Slicing" },
   { id: "rebar", label: "Rebar" },
+  { id: "details", label: "Details" },
 ];
 
 const REBAR_COLORS = [
@@ -607,6 +610,7 @@ export default function ModelViewer() {
   const [slicePreviewActive, setSlicePreviewActive] = useState(false);
   const [flipSliceSection, setFlipSliceSection] = useState(true);
   const [slicePins, setSlicePins] = useState<SlicePin[]>([]);
+  const [detailNoteDraft, setDetailNoteDraft] = useState("");
   const [selectedSlicePinId, setSelectedSlicePinId] =
     useState<string | null>(null);
   const [selectedSlicePinIds, setSelectedSlicePinIds] = useState<Set<string>>(
@@ -1016,9 +1020,43 @@ export default function ModelViewer() {
     () => slicePins.find((pin) => pin.id === activeSlicePinId) ?? null,
     [activeSlicePinId, slicePins],
   );
+  const activeDetail = activeSlicePin?.detail ?? {
+    runAdjustments: {},
+    notes: [],
+  };
+  const updateActiveDetail = (
+    update: (current: NonNullable<SlicePin["detail"]>) => SlicePin["detail"],
+  ) => {
+    if (!activeSlicePinId) return;
+    setSlicePins((current) =>
+      current.map((pin) =>
+        pin.id === activeSlicePinId
+          ? {
+              ...pin,
+              detail: update(
+                pin.detail ?? { runAdjustments: {}, notes: [] },
+              ),
+            }
+          : pin,
+      ),
+    );
+  };
+  const updateDetailRunAdjustment = (
+    runId: string,
+    adjustment: DetailRunAdjustment,
+  ) => {
+    updateActiveDetail((current) => ({
+      ...current,
+      runAdjustments: { ...current.runAdjustments, [runId]: adjustment },
+    }));
+  };
+  const updateDetailNotes = (notes: DetailNote[]) => {
+    updateActiveDetail((current) => ({ ...current, notes }));
+  };
   const activeCustomSlice = useMemo(() => {
     if (
       (activeTab === "rebar" && !activeSlicePin) ||
+      (activeTab === "details" && !activeSlicePin) ||
       (activeTab === "slicing" && !slicePreviewActive && !activeSlicePin)
     ) {
       return null;
@@ -1028,7 +1066,9 @@ export default function ModelViewer() {
     const plane = rebarPlanes.find((candidate) => candidate.id === planeId);
     if (
       !plane ||
-      (activeTab !== "slicing" && activeTab !== "rebar")
+      (activeTab !== "slicing" &&
+        activeTab !== "rebar" &&
+        activeTab !== "details")
     ) {
       return null;
     }
@@ -1452,7 +1492,7 @@ export default function ModelViewer() {
   ]);
   const activeSectionView = useMemo(() => {
     if (
-      activeTab !== "slicing" ||
+      (activeTab !== "slicing" && activeTab !== "details") ||
       !activeCustomSlice ||
       !inchesPerModelUnit ||
       !activeSlicePin
@@ -1962,7 +2002,9 @@ export default function ModelViewer() {
             saved.inchesPerModelUnit,
         );
         setActiveTab(
-          saved.activeTab === "slicing" || saved.activeTab === "rebar"
+          saved.activeTab === "slicing" ||
+          saved.activeTab === "rebar" ||
+          saved.activeTab === "details"
             ? saved.activeTab
             : "setup",
         );
@@ -2234,7 +2276,9 @@ export default function ModelViewer() {
       );
       setActiveTab(
         importedSetupComplete &&
-          (saved.activeTab === "slicing" || saved.activeTab === "rebar")
+          (saved.activeTab === "slicing" ||
+            saved.activeTab === "rebar" ||
+            saved.activeTab === "details")
           ? saved.activeTab
           : importedSetupComplete
             ? "rebar"
@@ -4838,7 +4882,9 @@ export default function ModelViewer() {
                     Export Bar Quantity
                   </button>
                 )}
-                {(activeTab === "slicing" || activeTab === "rebar") && (
+                {(activeTab === "slicing" ||
+                  activeTab === "rebar" ||
+                  activeTab === "details") && (
                   <button
                     disabled={!activeSectionView || !activeSlicePin}
                     onClick={() => {
@@ -4879,6 +4925,7 @@ export default function ModelViewer() {
                       <div><dt>Right-click</dt><dd>Remove an editable face vertex</dd></div>
                       <div><dt>Double-click</dt><dd>Rename a plane</dd></div>
                       <div><dt>Ctrl + click</dt><dd>Select multiple bar runs</dd></div>
+                      <div><dt>Detail drag</dt><dd>Move labels, leaders, arrows, and dimensions</dd></div>
                     </dl>
                     <strong>Keyboard</strong>
                     <dl>
@@ -5115,10 +5162,19 @@ export default function ModelViewer() {
                 if (tab.id === "setup" && setupComplete) setSetupStep(6);
                 if (tab.id === "rebar") setHover(null);
                 if (
-                  (tab.id === "slicing" || tab.id === "rebar") &&
+                  (tab.id === "slicing" ||
+                    tab.id === "rebar" ||
+                    tab.id === "details") &&
                   currentBounds
                 ) {
                   setSlice(fullSlice(currentBounds));
+                }
+                if (tab.id === "details") {
+                  const detailView =
+                    activeSlicePin ??
+                    slicePins.find((pin) => pin.viewpoint) ??
+                    slicePins[0];
+                  if (detailView) activateSlicePin(detailView, true);
                 }
                 if (rebarPhase === "plane-create") {
                   setRebarPhase("idle");
@@ -7655,6 +7711,110 @@ export default function ModelViewer() {
           </div>
         )}
 
+        {activeTab === "details" && (
+          <div className="tab-content details-content">
+            <h2>Reinforcing Details</h2>
+            {!activeSlicePin ? (
+              <section className="details-card">
+                <strong>No section selected</strong>
+                <p>
+                  Create a slice in Slicing, save it as a view, then select that
+                  view from the ribbon below.
+                </p>
+              </section>
+            ) : (
+              <>
+                <section className="details-card">
+                  <strong>{activeSlicePin.name}</strong>
+                  <p>
+                    Drag labels, leader elbows, arrow points, and dimensions in
+                    the drawing. Yellow handles identify editable points.
+                  </p>
+                </section>
+                <section className="details-card">
+                  <h3>General Notes</h3>
+                  <div className="detail-note-form">
+                    <input
+                      value={detailNoteDraft}
+                      placeholder="Note text"
+                      aria-label="New reinforcing note"
+                      onChange={(event) => setDetailNoteDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter") return;
+                        const text = detailNoteDraft.trim();
+                        if (!text) return;
+                        updateDetailNotes([
+                          ...activeDetail.notes,
+                          {
+                            id: `detail-note-${crypto.randomUUID()}`,
+                            text,
+                            target: { x: 0.5, y: 0.5 },
+                            leader: { x: 0.58, y: 0.34 },
+                            label: { x: 0.68, y: 0.34 },
+                          },
+                        ]);
+                        setDetailNoteDraft("");
+                      }}
+                    />
+                    <button
+                      className="button compact"
+                      disabled={!detailNoteDraft.trim()}
+                      onClick={() => {
+                        const text = detailNoteDraft.trim();
+                        if (!text) return;
+                        updateDetailNotes([
+                          ...activeDetail.notes,
+                          {
+                            id: `detail-note-${crypto.randomUUID()}`,
+                            text,
+                            target: { x: 0.5, y: 0.5 },
+                            leader: { x: 0.58, y: 0.34 },
+                            label: { x: 0.68, y: 0.34 },
+                          },
+                        ]);
+                        setDetailNoteDraft("");
+                      }}
+                    >
+                      Add Note
+                    </button>
+                  </div>
+                  {activeDetail.notes.map((note) => (
+                    <div className="detail-note-entry" key={note.id}>
+                      <span>{note.text}</span>
+                      <button
+                        type="button"
+                        aria-label={`Delete note ${note.text}`}
+                        title="Delete note"
+                        onClick={() =>
+                          updateDetailNotes(
+                            activeDetail.notes.filter(
+                              (candidate) => candidate.id !== note.id,
+                            ),
+                          )
+                        }
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </section>
+                <button
+                  className="button danger-outline"
+                  onClick={() => {
+                    updateActiveDetail(() => ({
+                      runAdjustments: {},
+                      notes: [],
+                    }));
+                    activateSlicePin(activeSlicePin, true);
+                  }}
+                >
+                  Reset View
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         <footer className="rail-footer">
           <span>{status}</span>
         </footer>
@@ -7698,11 +7858,12 @@ export default function ModelViewer() {
           elementSurfaces={elementSkin.surfaces}
           elements={elements}
           showElementSkin={showElementSkin}
-          slicingMode={activeTab === "slicing"}
+          slicingMode={activeTab === "slicing" || activeTab === "details"}
           sliceBounds={currentBounds}
           rebarMode={activeTab === "rebar"}
           showRebarScene={
             activeTab === "rebar" ||
+            activeTab === "details" ||
             (activeTab === "slicing" &&
               (showRebarInSlicing || lineAndBar)) ||
             (activeTab === "slicing" &&
@@ -7802,6 +7963,11 @@ export default function ModelViewer() {
           }
           rebarPlanePreviews={displayRebarPlanePreviews}
           rebarSectionView={activeSectionView}
+          detailMode={activeTab === "details"}
+          detailRunAdjustments={activeDetail.runAdjustments}
+          detailNotes={activeDetail.notes}
+          onDetailRunAdjustment={updateDetailRunAdjustment}
+          onDetailNotesChange={updateDetailNotes}
           sectionViewRequest={sectionViewRequest}
           rebarSection={
             advancedAnchorSection !== null
@@ -7846,7 +8012,11 @@ export default function ModelViewer() {
           elementEditMode={elementEditMode}
           selectedElementIds={[...selectedElementIds]}
           onPickElement={toggleElementSelection}
-          onHover={activeTab === "rebar" ? () => undefined : setHover}
+          onHover={
+            activeTab === "rebar" || activeTab === "details"
+              ? () => undefined
+              : setHover
+          }
           onHoverFace={setHoveredFaceId}
           onPickNode={handleNodePick}
           onPickFace={handleFacePick}
@@ -7854,7 +8024,7 @@ export default function ModelViewer() {
           onInsertFaceVertex={insertFaceVertex}
         />
 
-        {(activeTab === "slicing" || activeTab === "rebar") &&
+        {activeTab === "details" &&
           slicePins.some((pin) => pin.viewpoint) && (
             <div className="saved-view-ribbon" aria-label="Saved views">
               <div>
@@ -7897,7 +8067,7 @@ export default function ModelViewer() {
           </div>
         )}
 
-        {activeTab !== "rebar" && hover && (
+        {(activeTab === "setup" || activeTab === "slicing") && hover && (
           <div
             className={`hover-label ${
               editableFace?.nodeIds.includes(hover.node.id)

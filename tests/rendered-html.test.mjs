@@ -41,7 +41,7 @@ test("server-renders the MCT Section Lab application", async () => {
 });
 
 test("includes plane-based rebar and quantity export workflows", async () => {
-  const [viewer, styles, types, storage] = await Promise.all([
+  const [viewer, styles, types, storage, viewport] = await Promise.all([
     readFile(
       new URL("../app/components/ModelViewer.tsx", import.meta.url),
       "utf8",
@@ -49,6 +49,10 @@ test("includes plane-based rebar and quantity export workflows", async () => {
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/lib/types.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/lib/workspaceStorage.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../app/components/PointCloudViewport.tsx", import.meta.url),
+      "utf8",
+    ),
   ]);
   assert.match(viewer, /Add Plane/);
   assert.match(viewer, /Delete Plane/);
@@ -61,6 +65,10 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /Choose Splay Target Plane/);
   assert.match(viewer, /Additional Endpoint Vertex/);
   assert.match(viewer, /Create Bar Run/);
+  assert.match(viewer, /Reinforcing Details/);
+  assert.match(viewport, /Editable reinforcing detail annotations/);
+  assert.match(viewer, /Reset View/);
+  assert.match(viewer, /activeTab === "details"/);
   assert.match(viewer, /Splayed runs and varying-length runs cannot be combined/);
   assert.match(viewer, /Reinforcing section throw depth/);
   assert.match(viewer, /Lap snap distance from each source-bar end/);
@@ -131,6 +139,11 @@ test("includes plane-based rebar and quantity export workflows", async () => {
     /\.combined-slicing \.slice-pin-list[\s\S]*max-height: none/,
   );
   assert.match(styles, /--control-rail-width: 340px/);
+  assert.match(
+    styles,
+    /\.workflow-tabs[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/,
+  );
+  assert.match(styles, /\.detail-annotation-layer/);
   assert.match(
     styles,
     /\.combined-slicing \.plane-list-actions,[\s\S]*\.combined-slicing \.pin-management-actions[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/,

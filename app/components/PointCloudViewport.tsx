@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
@@ -18,9 +24,15 @@ import {
   rebarBendStandard,
 } from "../lib/rebarStandards";
 import { sectionRebarGeometry } from "../lib/rebarSection";
+import {
+  offsetLappedSectionSegments,
+  type LapDimension,
+} from "../lib/rebarDetail";
 import type {
   Bounds,
   CameraViewpoint,
+  DetailNote,
+  DetailRunAdjustment,
   LocalBasis,
   ElementSurface,
   ModelElement,
@@ -130,6 +142,14 @@ type Props = {
     normal: Vec3;
     throwDepthModelUnits: number;
   } | null;
+  detailMode: boolean;
+  detailRunAdjustments: Record<string, DetailRunAdjustment>;
+  detailNotes: DetailNote[];
+  onDetailRunAdjustment: (
+    runId: string,
+    adjustment: DetailRunAdjustment,
+  ) => void;
+  onDetailNotesChange: (notes: DetailNote[]) => void;
   sectionViewRequest: {
     id: string;
     nonce: number;
@@ -159,6 +179,23 @@ type Props = {
     nodeId: number,
   ) => void;
 };
+
+type ScreenPoint = { x: number; y: number };
+
+type DetailDrag =
+  | {
+      kind: "run-label" | "run-leader" | "dimension" | "lap-dimension";
+      id: string;
+      start: ScreenPoint;
+      initial: DetailRunAdjustment;
+    }
+  | { kind: "run-target"; id: string }
+  | {
+      kind: "note-label" | "note-leader" | "note-target";
+      id: string;
+      start: ScreenPoint;
+      initial: DetailNote;
+    };
 
 type SceneState = {
   camera: THREE.PerspectiveCamera;
@@ -672,6 +709,11 @@ export default function PointCloudViewport({
   rebarDrawingPlane,
   rebarPlanePreviews,
   rebarSectionView,
+  detailMode,
+  detailRunAdjustments,
+  detailNotes,
+  onDetailRunAdjustment,
+  onDetailNotesChange,
   sectionViewRequest,
   inchesPerModelUnit,
   showConcreteSkin,
@@ -738,6 +780,8 @@ export default function PointCloudViewport({
     inches: number;
     wholeInchSnap: boolean;
   } | null>(null);
+  const [detailProjectionRevision, setDetailProjectionRevision] = useState(0);
+  const [detailDrag, setDetailDrag] = useState<DetailDrag | null>(null);
 
   nodesRef.current = nodes;
   sliceRef.current = slice;
@@ -829,6 +873,22 @@ export default function PointCloudViewport({
     state.camera.lookAt(state.controls.target);
     state.controls.update();
   }, [viewpointToApply]);
+
+  useEffect(() => {
+    const state = sceneRef.current;
+    const host = hostRef.current;
+    if (!state || !host || !detailMode) return;
+    const refresh = () =>
+      setDetailProjectionRevision((current) => current + 1);
+    state.controls.addEventListener("change", refresh);
+    const observer = new ResizeObserver(refresh);
+    observer.observe(host);
+    refresh();
+    return () => {
+      state.controls.removeEventListener("change", refresh);
+      observer.disconnect();
+    };
+  }, [detailMode, sectionViewRequest, viewpointToApply]);
 
   useEffect(() => {
     const state = sceneRef.current;
@@ -1997,6 +2057,149 @@ export default function PointCloudViewport({
     return generated;
   }, [basis, inchesPerModelUnit, rebarPlanes, rebarRuns]);
 
+  const sectionRebarGraphics = useMemo(() => {
+    if (!rebarSectionView) return null;
+    type Graphic = {
+      segments: Array<[Vec3, Vec3]>;
+      circles: Vec3[];
+      lapDimensions: LapDimension[];
+    };
+    const raw = new Map<string, Graphic>();
+    const center = allNodes.length
+      ? allNodes.reduce(
+          (sum, node) => {
+            const point = node.local ?? node.global;
+            return {
+              x: sum.x + point.x / allNodes.length,
+              y: sum.y + point.y / allNodes.length,
+              z: sum.z + point.z / allNodes.length,
+            };
+          },
+          { x: 0, y: 0, z: 0 },
+        )
+      : rebarSectionView.origin;
+    for (const run of rebarRuns) {
+      const graphic: Graphic = {
+        segments: [],
+        circles: [],
+        lapDimensions: [],
+      };
+      for (const instance of generatedRebarInstances.get(run.id) ?? []) {
+        const section = sectionRebarGeometry(
+          instance,
+          rebarSectionView.origin,
+          rebarSectionView.normal,
+          rebarSectionView.throwDepthModelUnits,
+        );
+        section.projectedLines.forEach(({ start, end }) =>
+          graphic.segments.push([start, end]),
+        );
+        section.circles.forEach(({ center: circleCenter }) => {
+          if (
+            !graphic.circles.some(
+              (candidate) =>
+                Math.hypot(
+                  candidate.x - circleCenter.x,
+                  candidate.y - circleCenter.y,
+                  candidate.z - circleCenter.z,
+                ) <= Math.max(tolerance * 10, 1e-7),
+            )
+          ) {
+            graphic.circles.push(circleCenter);
+          }
+        });
+      }
+      raw.set(run.id, graphic);
+    }
+
+    const result = new Map(raw);
+    if (!inchesPerModelUnit) return result;
+    for (const run of rebarRuns) {
+      if (!run.lappedFromRunId) continue;
+      const graphic = raw.get(run.id);
+      const source = raw.get(run.lappedFromRunId);
+      if (!graphic || !source || !graphic.segments.length) continue;
+      const sourceRun = rebarRuns.find(
+        (candidate) => candidate.id === run.lappedFromRunId,
+      );
+      const sourceDiameter = rebarBendStandard(
+        sourceRun?.barNumber ?? run.barNumber,
+      ).diameterInches;
+      const offset = offsetLappedSectionSegments(
+        graphic.segments.map(([start, end]) => ({ start, end })),
+        source.segments.map(([start, end]) => ({ start, end })),
+        rebarSectionView.normal,
+        center,
+        (sourceDiameter + 0.125) / inchesPerModelUnit,
+        tolerance,
+      );
+      result.set(run.id, {
+        ...graphic,
+        segments: offset.segments.map(({ start, end }) => [start, end]),
+        lapDimensions: offset.lapDimensions,
+      });
+    }
+    return result;
+  }, [
+    allNodes,
+    generatedRebarInstances,
+    inchesPerModelUnit,
+    rebarRuns,
+    rebarSectionView,
+    tolerance,
+  ]);
+
+  const detailScreenGraphics = useMemo(() => {
+    const state = sceneRef.current;
+    const host = hostRef.current;
+    if (
+      !detailMode ||
+      !state ||
+      !host ||
+      !sectionRebarGraphics ||
+      !inchesPerModelUnit
+    ) {
+      return [];
+    }
+    const width = Math.max(host.clientWidth, 1);
+    const height = Math.max(host.clientHeight, 1);
+    const project = (point: Vec3): ScreenPoint => {
+      const projected = toThree(point, displayOffset)
+        .project(state.camera);
+      return {
+        x: (projected.x * 0.5 + 0.5) * width,
+        y: (-projected.y * 0.5 + 0.5) * height,
+      };
+    };
+    return rebarRuns.map((run) => {
+      const graphic = sectionRebarGraphics.get(run.id) ?? {
+        segments: [],
+        circles: [],
+        lapDimensions: [],
+      };
+      return {
+        run,
+        segments: graphic.segments.map(([start, end]) => [
+          project(start),
+          project(end),
+        ] as [ScreenPoint, ScreenPoint]),
+        dots: graphic.circles.map(project),
+        lapDimensions: graphic.lapDimensions.map((dimension) => ({
+          start: project(dimension.start),
+          end: project(dimension.end),
+          lengthInches: dimension.lengthModelUnits * inchesPerModelUnit,
+        })),
+      };
+    });
+  }, [
+    detailMode,
+    detailProjectionRevision,
+    displayOffset,
+    inchesPerModelUnit,
+    rebarRuns,
+    sectionRebarGraphics,
+  ]);
+
   useEffect(() => {
     const state = sceneRef.current;
     if (!state) return;
@@ -2611,37 +2814,23 @@ export default function PointCloudViewport({
         ? selectedColorBuffers.joints
         : colorBuffers.joints;
       const instances = generatedRebarInstances.get(run.id) ?? [];
+      if (rebarSectionView) {
+        const graphic = sectionRebarGraphics?.get(run.id);
+        const lift = Math.max(tolerance * 5, 1e-8);
+        const towardCamera = (point: Vec3): Vec3 => ({
+          x: point.x + rebarSectionView.normal.x * lift,
+          y: point.y + rebarSectionView.normal.y * lift,
+          z: point.z + rebarSectionView.normal.z * lift,
+        });
+        graphic?.segments.forEach(([start, end]) => {
+          targetSegments.push([towardCamera(start), towardCamera(end)]);
+        });
+        graphic?.circles.forEach((center) => {
+          targetJoints.push(towardCamera(center));
+        });
+      }
       for (const instance of instances) {
-        if (rebarSectionView) {
-          const section = sectionRebarGeometry(
-            instance,
-            rebarSectionView.origin,
-            rebarSectionView.normal,
-            rebarSectionView.throwDepthModelUnits,
-          );
-          const lift = Math.max(tolerance * 5, 1e-8);
-          const towardCamera = (point: Vec3): Vec3 => ({
-            x: point.x + rebarSectionView.normal.x * lift,
-            y: point.y + rebarSectionView.normal.y * lift,
-            z: point.z + rebarSectionView.normal.z * lift,
-          });
-          section.projectedLines.forEach(({ start, end }) => {
-            targetSegments.push([towardCamera(start), towardCamera(end)]);
-          });
-          section.circles.forEach(({ center }) => {
-            const point = towardCamera(center);
-            const duplicate = targetJoints.some(
-              (candidate) =>
-                Math.hypot(
-                  candidate.x - point.x,
-                  candidate.y - point.y,
-                  candidate.z - point.z,
-                ) <= Math.max(tolerance * 10, 1e-7),
-            );
-            if (!duplicate) targetJoints.push(point);
-          });
-          continue;
-        }
+        if (rebarSectionView) continue;
         for (const line of instance) {
           targetJoints.push(...line.points);
           for (let index = 0; index < line.points.length - 1; index += 1) {
@@ -2971,6 +3160,7 @@ export default function PointCloudViewport({
     rebarAdvancedAnchors,
     rebarRuns,
     generatedRebarInstances,
+    sectionRebarGraphics,
     rebarSection,
     selectedRebarRunIds,
     selectedRebarEdgeIndex,
@@ -3243,6 +3433,141 @@ export default function PointCloudViewport({
     volumeConfirmed,
   ]);
 
+  const nearestDetailTarget = (
+    point: ScreenPoint,
+    segments: Array<[ScreenPoint, ScreenPoint]>,
+  ) => {
+    let best = { segmentIndex: 0, fraction: 0.5, distance: Infinity };
+    segments.forEach(([start, end], segmentIndex) => {
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const denominator = dx * dx + dy * dy || 1;
+      const fraction = Math.max(
+        0,
+        Math.min(
+          1,
+          ((point.x - start.x) * dx + (point.y - start.y) * dy) /
+            denominator,
+        ),
+      );
+      const x = start.x + dx * fraction;
+      const y = start.y + dy * fraction;
+      const distance = Math.hypot(point.x - x, point.y - y);
+      if (distance < best.distance) {
+        best = { segmentIndex, fraction, distance };
+      }
+    });
+    return best;
+  };
+
+  const updateDetailNote = (id: string, next: DetailNote) => {
+    onDetailNotesChange(
+      detailNotes.map((note) => (note.id === id ? next : note)),
+    );
+  };
+
+  const handleDetailPointerMove = (
+    event: ReactPointerEvent<SVGSVGElement>,
+  ) => {
+    if (!detailDrag) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const point = {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    };
+    if (detailDrag.kind === "run-target") {
+      const graphic = detailScreenGraphics.find(
+        (candidate) => candidate.run.id === detailDrag.id,
+      );
+      if (!graphic?.segments.length) return;
+      const target = nearestDetailTarget(point, graphic.segments);
+      onDetailRunAdjustment(detailDrag.id, {
+        ...(detailRunAdjustments[detailDrag.id] ?? {}),
+        target: {
+          segmentIndex: target.segmentIndex,
+          fraction: target.fraction,
+        },
+      });
+      return;
+    }
+    const dx = event.clientX - detailDrag.start.x;
+    const dy = event.clientY - detailDrag.start.y;
+    if (
+      detailDrag.kind === "run-label" ||
+      detailDrag.kind === "run-leader"
+    ) {
+      const initial = detailDrag.initial;
+      const next = { ...initial };
+      if (detailDrag.kind === "run-label") {
+        next.labelOffset = {
+          x: (initial.labelOffset?.x ?? 54) + dx,
+          y: (initial.labelOffset?.y ?? -22) + dy,
+        };
+      } else {
+        next.leaderOffset = {
+          x: (initial.leaderOffset?.x ?? 22) + dx,
+          y: (initial.leaderOffset?.y ?? -22) + dy,
+        };
+      }
+      onDetailRunAdjustment(detailDrag.id, next);
+      return;
+    }
+    if (
+      detailDrag.kind === "dimension" ||
+      detailDrag.kind === "lap-dimension"
+    ) {
+      const initial = detailDrag.initial;
+      onDetailRunAdjustment(detailDrag.id, {
+        ...initial,
+        ...(detailDrag.kind === "dimension"
+          ? { dimensionOffset: (initial.dimensionOffset ?? 0) + dy }
+          : {
+              lapDimensionOffset:
+                (initial.lapDimensionOffset ?? 0) + dy,
+            }),
+      });
+      return;
+    }
+    const initial = detailDrag.initial;
+    if (detailDrag.kind === "note-target") {
+      const allSegments = detailScreenGraphics.flatMap(
+        (graphic) => graphic.segments,
+      );
+      const nearest = nearestDetailTarget(point, allSegments);
+      const segment = allSegments[nearest.segmentIndex];
+      const snapped = segment
+        ? {
+            x:
+              segment[0].x +
+              (segment[1].x - segment[0].x) * nearest.fraction,
+            y:
+              segment[0].y +
+              (segment[1].y - segment[0].y) * nearest.fraction,
+          }
+        : point;
+      updateDetailNote(detailDrag.id, {
+        ...initial,
+        target: { x: snapped.x / rect.width, y: snapped.y / rect.height },
+      });
+    } else if (detailDrag.kind === "note-label") {
+      updateDetailNote(detailDrag.id, {
+        ...initial,
+        label: {
+          x: (initial.label.x * rect.width + dx) / rect.width,
+          y: (initial.label.y * rect.height + dy) / rect.height,
+        },
+      });
+    } else {
+      updateDetailNote(detailDrag.id, {
+        ...initial,
+        leader: {
+          x: (initial.leader.x * rect.width + dx) / rect.width,
+          y: (initial.leader.y * rect.height + dy) / rect.height,
+        },
+      });
+    }
+  };
+
   if (renderError) {
     return (
       <div className="viewport-canvas render-fallback" role="alert">
@@ -3259,6 +3584,307 @@ export default function PointCloudViewport({
 
   return (
     <div ref={hostRef} className="viewport-canvas" aria-label="3D node cloud">
+      {detailMode && rebarSectionView && (
+        <svg
+          className="detail-annotation-layer"
+          aria-label="Editable reinforcing detail annotations"
+          onPointerMove={handleDetailPointerMove}
+          onPointerUp={() => setDetailDrag(null)}
+          onPointerCancel={() => setDetailDrag(null)}
+        >
+          <defs>
+            <marker
+              id="detail-arrow"
+              viewBox="0 0 10 10"
+              refX="8"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#111" />
+            </marker>
+          </defs>
+          {detailScreenGraphics.map((graphic) => {
+            const adjustment = detailRunAdjustments[graphic.run.id] ?? {};
+            const label = `${graphic.run.name} @ ${graphic.run.spacingInches}\"`;
+            if (graphic.dots.length >= 2) {
+              let pair: [ScreenPoint, ScreenPoint] = [
+                graphic.dots[0],
+                graphic.dots[1],
+              ];
+              let farthest = 0;
+              graphic.dots.forEach((first, firstIndex) =>
+                graphic.dots.slice(firstIndex + 1).forEach((second) => {
+                  const distance = Math.hypot(
+                    second.x - first.x,
+                    second.y - first.y,
+                  );
+                  if (distance > farthest) {
+                    farthest = distance;
+                    pair = [first, second];
+                  }
+                }),
+              );
+              const dx = pair[1].x - pair[0].x;
+              const dy = pair[1].y - pair[0].y;
+              const magnitude = Math.hypot(dx, dy) || 1;
+              let normal = { x: -dy / magnitude, y: dx / magnitude };
+              if (normal.y > 0) normal = { x: -normal.x, y: -normal.y };
+              const offset = 32 - (adjustment.dimensionOffset ?? 0);
+              const first = {
+                x: pair[0].x + normal.x * offset,
+                y: pair[0].y + normal.y * offset,
+              };
+              const second = {
+                x: pair[1].x + normal.x * offset,
+                y: pair[1].y + normal.y * offset,
+              };
+              const middle = {
+                x: (first.x + second.x) / 2,
+                y: (first.y + second.y) / 2 - 7,
+              };
+              return (
+                <g
+                  key={graphic.run.id}
+                  className="detail-dimension annotation-draggable"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    setDetailDrag({
+                      kind: "dimension",
+                      id: graphic.run.id,
+                      start: { x: event.clientX, y: event.clientY },
+                      initial: adjustment,
+                    });
+                  }}
+                >
+                  <line x1={pair[0].x} y1={pair[0].y} x2={first.x} y2={first.y} />
+                  <line x1={pair[1].x} y1={pair[1].y} x2={second.x} y2={second.y} />
+                  <line
+                    x1={first.x}
+                    y1={first.y}
+                    x2={second.x}
+                    y2={second.y}
+                    markerStart="url(#detail-arrow)"
+                    markerEnd="url(#detail-arrow)"
+                  />
+                  <text x={middle.x} y={middle.y} textAnchor="middle">
+                    {label}
+                  </text>
+                </g>
+              );
+            }
+
+            const longest = graphic.segments.reduce(
+              (best, segment, index) => {
+                const distance = Math.hypot(
+                  segment[1].x - segment[0].x,
+                  segment[1].y - segment[0].y,
+                );
+                return distance > best.distance
+                  ? { index, distance }
+                  : best;
+              },
+              { index: 0, distance: 0 },
+            );
+            const targetDefinition = adjustment.target ?? {
+              segmentIndex: longest.index,
+              fraction: 0.5,
+            };
+            const targetSegment =
+              graphic.segments[targetDefinition.segmentIndex] ??
+              graphic.segments[longest.index];
+            if (!targetSegment) return null;
+            const target = {
+              x:
+                targetSegment[0].x +
+                (targetSegment[1].x - targetSegment[0].x) *
+                  targetDefinition.fraction,
+              y:
+                targetSegment[0].y +
+                (targetSegment[1].y - targetSegment[0].y) *
+                  targetDefinition.fraction,
+            };
+            const leader = {
+              x: target.x + (adjustment.leaderOffset?.x ?? 22),
+              y: target.y + (adjustment.leaderOffset?.y ?? -22),
+            };
+            const textPoint = {
+              x: target.x + (adjustment.labelOffset?.x ?? 54),
+              y: target.y + (adjustment.labelOffset?.y ?? -22),
+            };
+            return (
+              <g key={graphic.run.id} className="detail-leader">
+                <polyline
+                  points={`${target.x},${target.y} ${leader.x},${leader.y} ${textPoint.x},${textPoint.y}`}
+                  markerStart="url(#detail-arrow)"
+                />
+                <text
+                  className="annotation-draggable"
+                  x={textPoint.x}
+                  y={textPoint.y - 5}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    setDetailDrag({
+                      kind: "run-label",
+                      id: graphic.run.id,
+                      start: { x: event.clientX, y: event.clientY },
+                      initial: adjustment,
+                    });
+                  }}
+                >
+                  {label}
+                </text>
+                <circle
+                  className="detail-handle annotation-draggable"
+                  cx={target.x}
+                  cy={target.y}
+                  r="5"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    setDetailDrag({ kind: "run-target", id: graphic.run.id });
+                  }}
+                />
+                <circle
+                  className="detail-handle annotation-draggable"
+                  cx={leader.x}
+                  cy={leader.y}
+                  r="5"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    setDetailDrag({
+                      kind: "run-leader",
+                      id: graphic.run.id,
+                      start: { x: event.clientX, y: event.clientY },
+                      initial: adjustment,
+                    });
+                  }}
+                />
+                {graphic.lapDimensions.map((dimension, index) => {
+                  const lapOffset =
+                    24 + (adjustment.lapDimensionOffset ?? 0) + index * 14;
+                  const dx = dimension.end.x - dimension.start.x;
+                  const dy = dimension.end.y - dimension.start.y;
+                  const magnitude = Math.hypot(dx, dy) || 1;
+                  let normal = { x: -dy / magnitude, y: dx / magnitude };
+                  if (normal.y < 0) normal = { x: -normal.x, y: -normal.y };
+                  const start = {
+                    x: dimension.start.x + normal.x * lapOffset,
+                    y: dimension.start.y + normal.y * lapOffset,
+                  };
+                  const end = {
+                    x: dimension.end.x + normal.x * lapOffset,
+                    y: dimension.end.y + normal.y * lapOffset,
+                  };
+                  return (
+                    <g
+                      key={`${graphic.run.id}-lap-${index}`}
+                      className="detail-lap-dimension annotation-draggable"
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        setDetailDrag({
+                          kind: "lap-dimension",
+                          id: graphic.run.id,
+                          start: { x: event.clientX, y: event.clientY },
+                          initial: adjustment,
+                        });
+                      }}
+                    >
+                      <line x1={dimension.start.x} y1={dimension.start.y} x2={start.x} y2={start.y} />
+                      <line x1={dimension.end.x} y1={dimension.end.y} x2={end.x} y2={end.y} />
+                      <line
+                        x1={start.x}
+                        y1={start.y}
+                        x2={end.x}
+                        y2={end.y}
+                        markerStart="url(#detail-arrow)"
+                        markerEnd="url(#detail-arrow)"
+                      />
+                      <text
+                        x={(start.x + end.x) / 2}
+                        y={(start.y + end.y) / 2 - 5}
+                        textAnchor="middle"
+                      >
+                        {`${dimension.lengthInches.toFixed(1)}\" LAP`}
+                      </text>
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })}
+          {detailNotes.map((note) => {
+            const host = hostRef.current;
+            const width = Math.max(host?.clientWidth ?? 1, 1);
+            const height = Math.max(host?.clientHeight ?? 1, 1);
+            const target = { x: note.target.x * width, y: note.target.y * height };
+            const leader = { x: note.leader.x * width, y: note.leader.y * height };
+            const label = { x: note.label.x * width, y: note.label.y * height };
+            return (
+              <g key={note.id} className="detail-leader custom-detail-note">
+                <polyline
+                  points={`${target.x},${target.y} ${leader.x},${leader.y} ${label.x},${label.y}`}
+                  markerStart="url(#detail-arrow)"
+                />
+                <text
+                  className="annotation-draggable"
+                  x={label.x}
+                  y={label.y - 5}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    setDetailDrag({
+                      kind: "note-label",
+                      id: note.id,
+                      start: { x: event.clientX, y: event.clientY },
+                      initial: note,
+                    });
+                  }}
+                >
+                  {note.text}
+                </text>
+                <circle
+                  className="detail-handle annotation-draggable"
+                  cx={target.x}
+                  cy={target.y}
+                  r="5"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    setDetailDrag({
+                      kind: "note-target",
+                      id: note.id,
+                      start: { x: event.clientX, y: event.clientY },
+                      initial: note,
+                    });
+                  }}
+                />
+                <circle
+                  className="detail-handle annotation-draggable"
+                  cx={leader.x}
+                  cy={leader.y}
+                  r="5"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    setDetailDrag({
+                      kind: "note-leader",
+                      id: note.id,
+                      start: { x: event.clientX, y: event.clientY },
+                      initial: note,
+                    });
+                  }}
+                />
+              </g>
+            );
+          })}
+        </svg>
+      )}
       {segmentLengthHud && (
         <div
           className="rebar-segment-length"

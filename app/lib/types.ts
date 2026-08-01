@@ -117,6 +117,22 @@ export type CameraViewpoint = {
   up: Vec3;
 };
 
+export type DetailRunAdjustment = {
+  labelOffset?: { x: number; y: number };
+  leaderOffset?: { x: number; y: number };
+  target?: { segmentIndex: number; fraction: number };
+  dimensionOffset?: number;
+  lapDimensionOffset?: number;
+};
+
+export type DetailNote = {
+  id: string;
+  text: string;
+  label: { x: number; y: number };
+  leader: { x: number; y: number };
+  target: { x: number; y: number };
+};
+
 export type SlicePin = {
   id: string;
   name: string;
@@ -130,6 +146,10 @@ export type SlicePin = {
     showConcreteSkin: boolean;
     showAllPlanes: boolean;
     showAllFavoritePlanes: boolean;
+  };
+  detail?: {
+    runAdjustments: Record<string, DetailRunAdjustment>;
+    notes: DetailNote[];
   };
 };
 
@@ -165,4 +185,4 @@ export type RebarRun = {
   advanced?: RebarAdvancedDefinition;
 };
 
-export type WorkflowTab = "setup" | "slicing" | "rebar";
+export type WorkflowTab = "setup" | "slicing" | "rebar" | "details";
