@@ -99,3 +99,119 @@ export function dxfRebarLines(
     ),
   );
 }
+
+const dxfFaceEntity = (
+  first: Vec3,
+  second: Vec3,
+  third: Vec3,
+  fourth: Vec3,
+  layer: string,
+) =>
+  pair(0, "3DFACE") +
+  pair(8, layerName(layer)) +
+  pointPairs(first) +
+  pointPairs(second, 11) +
+  pointPairs(third, 12) +
+  pointPairs(fourth, 13);
+
+const tubeSegmentFaces = (
+  start: Vec3,
+  end: Vec3,
+  radius: number,
+  layer: string,
+  sides: number,
+) => {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const dz = end.z - start.z;
+  const segmentLength = Math.hypot(dx, dy, dz);
+  if (segmentLength <= 1e-9 || radius <= 0) return [];
+  const direction = {
+    x: dx / segmentLength,
+    y: dy / segmentLength,
+    z: dz / segmentLength,
+  };
+  const reference =
+    Math.abs(direction.z) < 0.9
+      ? { x: 0, y: 0, z: 1 }
+      : { x: 0, y: 1, z: 0 };
+  const cross = (a: Vec3, b: Vec3): Vec3 => ({
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  });
+  const unit = (value: Vec3): Vec3 => {
+    const magnitude = Math.hypot(value.x, value.y, value.z) || 1;
+    return {
+      x: value.x / magnitude,
+      y: value.y / magnitude,
+      z: value.z / magnitude,
+    };
+  };
+  const firstAxis = unit(cross(direction, reference));
+  const secondAxis = unit(cross(direction, firstAxis));
+  const ring = (center: Vec3) =>
+    Array.from({ length: sides }, (_, index) => {
+      const angle = (index / sides) * Math.PI * 2;
+      const firstAmount = Math.cos(angle) * radius;
+      const secondAmount = Math.sin(angle) * radius;
+      return {
+        x:
+          center.x +
+          firstAxis.x * firstAmount +
+          secondAxis.x * secondAmount,
+        y:
+          center.y +
+          firstAxis.y * firstAmount +
+          secondAxis.y * secondAmount,
+        z:
+          center.z +
+          firstAxis.z * firstAmount +
+          secondAxis.z * secondAmount,
+      };
+    });
+  const startRing = ring(start);
+  const endRing = ring(end);
+  const entities: string[] = [];
+  for (let index = 0; index < sides; index += 1) {
+    const next = (index + 1) % sides;
+    entities.push(
+      dxfFaceEntity(
+        startRing[index],
+        startRing[next],
+        endRing[next],
+        endRing[index],
+        layer,
+      ),
+      dxfFaceEntity(start, startRing[next], startRing[index], startRing[index], layer),
+      dxfFaceEntity(end, endRing[index], endRing[next], endRing[next], layer),
+    );
+  }
+  return entities;
+};
+
+/** Exports each rebar centerline segment as an eight-sided tube at true diameter. */
+export function dxfRebarSolids(
+  instances: RebarLine[][],
+  transform: (point: Vec3) => Vec3,
+  diameter: number,
+  layer: string,
+  sides = 8,
+) {
+  return instances.flatMap((instance) =>
+    instance.flatMap((line) => {
+      const points = line.points.map(transform);
+      const segmentCount =
+        points.length - 1 + (line.closed && points.length > 2 ? 1 : 0);
+      return Array.from({ length: Math.max(0, segmentCount) }, (_, index) =>
+        tubeSegmentFaces(
+          points[index],
+          points[(index + 1) % points.length],
+          diameter / 2,
+          layer,
+          Math.max(6, Math.round(sides)),
+        ),
+      ).flat();
+    }),
+  );
+}

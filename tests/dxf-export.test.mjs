@@ -20,7 +20,14 @@ vm.runInNewContext(compiled, {
   exports: module.exports,
   require: () => ({}),
 });
-const { createDxf, dxfCircle, dxfFaces, dxfLine, dxfPolyline } =
+const {
+  createDxf,
+  dxfCircle,
+  dxfFaces,
+  dxfLine,
+  dxfPolyline,
+  dxfRebarSolids,
+} =
   module.exports;
 
 test("creates an AutoCAD R12 DXF with section entities", () => {
@@ -48,4 +55,17 @@ test("creates 3D face and polyline entities", () => {
   assert.match(faces[0], /0\n3DFACE/);
   assert.match(polyline, /0\nPOLYLINE/);
   assert.match(polyline, /70\n8/);
+});
+
+test("exports 3D rebar as true-diameter tube faces", () => {
+  const faces = dxfRebarSolids(
+    [[{ id: "bar", points: [{ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }] }]],
+    (point) => point,
+    1,
+    "REBAR_5",
+    8,
+  );
+  assert.equal(faces.length, 24);
+  assert.ok(faces.every((entity) => /0\n3DFACE\n8\nREBAR_5/.test(entity)));
+  assert.match(faces.join(""), /20\n0\.5/);
 });

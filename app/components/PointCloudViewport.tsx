@@ -143,6 +143,7 @@ type Props = {
   rebarDrawing: boolean;
   showAxes: boolean;
   onPickRebarPoint: (point: Vec3) => void;
+  onRejectRebarPoint: () => void;
   onHover: (payload: {
     node: ModelNode;
     clientX: number;
@@ -671,6 +672,7 @@ export default function PointCloudViewport({
   rebarDrawing,
   showAxes,
   onPickRebarPoint,
+  onRejectRebarPoint,
   onHover,
   onHoverFace,
   onPickNode,
@@ -712,6 +714,7 @@ export default function PointCloudViewport({
   const onPickElementRef = useRef(onPickElement);
   const rebarDrawingRef = useRef(rebarDrawing);
   const onPickRebarPointRef = useRef(onPickRebarPoint);
+  const onRejectRebarPointRef = useRef(onRejectRebarPoint);
   const rebarEdgeSelectionModeRef = useRef(rebarEdgeSelectionMode);
   const onPickRebarEdgeRef = useRef(onPickRebarEdge);
   const selectedRebarEdgeIndexRef = useRef(selectedRebarEdgeIndex);
@@ -744,6 +747,7 @@ export default function PointCloudViewport({
   onPickElementRef.current = onPickElement;
   rebarDrawingRef.current = rebarDrawing;
   onPickRebarPointRef.current = onPickRebarPoint;
+  onRejectRebarPointRef.current = onRejectRebarPoint;
   rebarEdgeSelectionModeRef.current = rebarEdgeSelectionMode;
   onPickRebarEdgeRef.current = onPickRebarEdge;
   selectedRebarEdgeIndexRef.current = selectedRebarEdgeIndex;
@@ -1457,6 +1461,9 @@ export default function PointCloudViewport({
           }
           rebarSnapSegment.visible = Boolean(candidate?.segment);
           if (candidate?.segment) {
+            rebarSnapSegment.material.color.setHex(
+              rebarSnapRequiredRef.current ? 0xffbf47 : 0xff8a2a,
+            );
             const start = toThree(
               candidate.segment[0],
               displayOffsetRef.current,
@@ -1500,7 +1507,9 @@ export default function PointCloudViewport({
           }
           renderer.domElement.style.cursor = candidate
             ? "crosshair"
-            : "default";
+            : rebarSnapRequiredRef.current
+              ? "not-allowed"
+              : "default";
           onHoverRef.current(null);
           onHoverFaceRef.current(null);
           return;
@@ -1734,6 +1743,7 @@ export default function PointCloudViewport({
               ? { point: hoveredRebarVertex }
               : rebarPointAtPointer(event);
           if (candidate) onPickRebarPointRef.current(candidate.point);
+          else onRejectRebarPointRef.current();
           return;
         }
 
@@ -1907,6 +1917,78 @@ export default function PointCloudViewport({
       );
     }
   }, []);
+
+  const generatedRebarInstances = useMemo(() => {
+    const generated = new Map<string, RebarLine[][]>();
+    for (const run of rebarRuns) {
+      const sourcePlane = rebarPlanes.find(
+        (plane) => plane.id === run.planeId,
+      );
+      const targetPlane = rebarPlanes.find(
+        (plane) => plane.id === run.advanced?.splay?.targetPlaneId,
+      );
+      const targetNormal = targetPlane
+        ? reframeDirection(targetPlane.objectNormal, null, basis)
+        : null;
+      const targetBaseOrigin = targetPlane
+        ? reframePoint(targetPlane.objectOrigin, null, basis)
+        : null;
+      const targetOrigin =
+        targetBaseOrigin && targetNormal
+          ? {
+              x:
+                targetBaseOrigin.x +
+                targetNormal.x * (run.advanced?.splay?.targetOffset ?? 0),
+              y:
+                targetBaseOrigin.y +
+                targetNormal.y * (run.advanced?.splay?.targetOffset ?? 0),
+              z:
+                targetBaseOrigin.z +
+                targetNormal.z * (run.advanced?.splay?.targetOffset ?? 0),
+            }
+          : null;
+      const sourceNormal = sourcePlane
+        ? reframeDirection(sourcePlane.objectNormal, null, basis)
+        : null;
+      const sourceBaseOrigin = sourcePlane
+        ? reframePoint(sourcePlane.objectOrigin, null, basis)
+        : null;
+      const sourceOrigin =
+        sourceBaseOrigin && sourceNormal
+          ? {
+              x:
+                sourceBaseOrigin.x +
+                sourceNormal.x * (run.startOffset ?? run.start),
+              y:
+                sourceBaseOrigin.y +
+                sourceNormal.y * (run.startOffset ?? run.start),
+              z:
+                sourceBaseOrigin.z +
+                sourceNormal.z * (run.startOffset ?? run.start),
+            }
+          : null;
+      generated.set(
+        run.id,
+        generateRebarInstances(run, {
+          sourceNormal,
+          sourceOrigin,
+          targetNormal,
+          targetOrigin,
+          lapOffsetModelUnits:
+            inchesPerModelUnit && run.lapOffsetInches
+              ? run.lapOffsetInches / inchesPerModelUnit
+              : 0,
+        }).map((instance) =>
+          applyStandardBendsToInstance(
+            instance,
+            run.barNumber,
+            inchesPerModelUnit ?? 1,
+          ),
+        ),
+      );
+    }
+    return generated;
+  }, [basis, inchesPerModelUnit, rebarPlanes, rebarRuns]);
 
   useEffect(() => {
     const state = sceneRef.current;
@@ -2466,68 +2548,7 @@ export default function PointCloudViewport({
       const targetJoints = runSelected
         ? selectedColorBuffers.joints
         : colorBuffers.joints;
-      const sourcePlane = rebarPlanes.find(
-        (plane) => plane.id === run.planeId,
-      );
-      const targetPlane = rebarPlanes.find(
-        (plane) => plane.id === run.advanced?.splay?.targetPlaneId,
-      );
-      const targetNormal = targetPlane
-        ? reframeDirection(targetPlane.objectNormal, null, basis)
-        : null;
-      const targetBaseOrigin = targetPlane
-        ? reframePoint(targetPlane.objectOrigin, null, basis)
-        : null;
-      const targetOrigin =
-        targetBaseOrigin && targetNormal
-          ? {
-              x:
-                targetBaseOrigin.x +
-                targetNormal.x * (run.advanced?.splay?.targetOffset ?? 0),
-              y:
-                targetBaseOrigin.y +
-                targetNormal.y * (run.advanced?.splay?.targetOffset ?? 0),
-              z:
-                targetBaseOrigin.z +
-                targetNormal.z * (run.advanced?.splay?.targetOffset ?? 0),
-            }
-          : null;
-      const sourceNormal = sourcePlane
-        ? reframeDirection(sourcePlane.objectNormal, null, basis)
-        : null;
-      const sourceBaseOrigin = sourcePlane
-        ? reframePoint(sourcePlane.objectOrigin, null, basis)
-        : null;
-      const sourceOrigin =
-        sourceBaseOrigin && sourceNormal
-          ? {
-              x:
-                sourceBaseOrigin.x +
-                sourceNormal.x * (run.startOffset ?? run.start),
-              y:
-                sourceBaseOrigin.y +
-                sourceNormal.y * (run.startOffset ?? run.start),
-              z:
-                sourceBaseOrigin.z +
-                sourceNormal.z * (run.startOffset ?? run.start),
-            }
-          : null;
-      const instances = generateRebarInstances(run, {
-        sourceNormal,
-        sourceOrigin,
-        targetNormal,
-        targetOrigin,
-        lapOffsetModelUnits:
-          inchesPerModelUnit && run.lapOffsetInches
-            ? run.lapOffsetInches / inchesPerModelUnit
-            : 0,
-      }).map((instance) =>
-        applyStandardBendsToInstance(
-          instance,
-          run.barNumber,
-          inchesPerModelUnit ?? 1,
-        ),
-      );
+      const instances = generatedRebarInstances.get(run.id) ?? [];
       for (const instance of instances) {
         for (const line of instance) {
           if (rebarSectionView) {
@@ -2881,6 +2902,7 @@ export default function PointCloudViewport({
     rebarPlanes,
     rebarAdvancedAnchors,
     rebarRuns,
+    generatedRebarInstances,
     rebarSection,
     selectedRebarRunIds,
     selectedRebarEdgeIndex,

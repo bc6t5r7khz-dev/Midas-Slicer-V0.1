@@ -58,6 +58,10 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /Export Project/);
   assert.match(viewer, /Export Active Section DXF/);
   assert.match(viewer, /Export 3D Model DXF/);
+  assert.match(viewer, /Choose Splay Target Plane/);
+  assert.match(viewer, /Additional Endpoint Vertex/);
+  assert.match(viewer, /Create Bar Run/);
+  assert.match(viewer, /Splayed runs and varying-length runs cannot be combined/);
   assert.match(viewer, /Reinforcing section throw depth/);
   assert.match(viewer, /Lap snap distance from each source-bar end/);
   assert.match(viewer, /Round a new bar segment to whole inches/);
@@ -105,12 +109,12 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /selectedSlicePinIds/);
   assert.match(viewer, /coordinateStep/);
   assert.match(viewer, /favoriteRebarPlaneIds/);
-  assert.match(viewer, /Add another keypoint/);
+  assert.match(viewer, /Add Path Keypoint/);
   assert.match(viewer, /rebarPathPoints/);
   assert.match(viewer, /delete-empty-group/);
   assert.match(viewer, /Start Section OK/);
   assert.match(viewer, /Rebar Shape OK/);
-  assert.match(viewer, /Choose Other Plane/);
+  assert.match(viewer, /Choose Splay Target Plane/);
   assert.match(viewer, /Splay target/);
   assert.match(viewer, /Bar mark series/);
   assert.match(viewer, /BAR SPACING/);

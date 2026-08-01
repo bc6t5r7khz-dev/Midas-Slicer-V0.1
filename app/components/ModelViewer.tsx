@@ -37,7 +37,7 @@ import {
   dxfCircle,
   dxfFaces,
   dxfLine,
-  dxfRebarLines,
+  dxfRebarSolids,
 } from "../lib/dxfExport";
 import {
   sectionPlaneAxes,
@@ -1996,50 +1996,59 @@ export default function ModelViewer() {
 
   useEffect(() => {
     if (!workspaceReady || !allNodes.length) return;
+    let idleSave: number | null = null;
     const timer = window.setTimeout(() => {
-      const workspace: SavedWorkspace = {
-        version: 1,
-        fileName,
-        nodes: allNodes.map(({ id, global }) => ({ id, global })),
-        faces,
-        activeTab,
-        definingFaces,
-        smartSelecting,
-        smartVariant,
-        smartAxis,
-        draftNodeIds,
-        selectedFaceIds: [...selectedFaceIds],
-        volumeConfirmed,
-        floorFaceId,
-        xDirectionNodeIds,
-        basis,
-        slice,
-        selectedNodeId: selectedNode?.id ?? null,
-        elements,
-        showElementSkin,
-        elementSkinVolume,
-        inchesPerModelUnit,
-        rebarRuns,
-        rebarPlanes,
-        rebarGroups,
-        rebarCoverOffsetInches,
-        rebarSecondaryOffsetInches,
-        sectionThrowDepthInches,
-        topRebarPlaneDismissed,
-        showConcreteSkin,
-        lineAndBar,
-        showRebarLabels,
-        favoriteRebarPlaneIds,
-        slicePins,
-        showRebarInSlicing,
+      const persistWorkspace = () => {
+        const workspace: SavedWorkspace = {
+          version: 1,
+          fileName,
+          nodes: allNodes.map(({ id, global }) => ({ id, global })),
+          faces,
+          activeTab,
+          definingFaces,
+          smartSelecting,
+          smartVariant,
+          smartAxis,
+          draftNodeIds,
+          selectedFaceIds: [...selectedFaceIds],
+          volumeConfirmed,
+          floorFaceId,
+          xDirectionNodeIds,
+          basis,
+          slice,
+          selectedNodeId: selectedNode?.id ?? null,
+          elements,
+          showElementSkin,
+          elementSkinVolume,
+          inchesPerModelUnit,
+          rebarRuns,
+          rebarPlanes,
+          rebarGroups,
+          rebarCoverOffsetInches,
+          rebarSecondaryOffsetInches,
+          sectionThrowDepthInches,
+          topRebarPlaneDismissed,
+          showConcreteSkin,
+          lineAndBar,
+          showRebarLabels,
+          favoriteRebarPlaneIds,
+          slicePins,
+          showRebarInSlicing,
+        };
+        void saveWorkspace(workspace).catch(() => {
+          setError(
+            "This browser could not save the workspace. Its local storage may be full or disabled.",
+          );
+        });
       };
-      void saveWorkspace(workspace).catch(() => {
-        setError(
-          "This browser could not save the workspace. Its local storage may be full or disabled.",
-        );
+      idleSave = window.requestIdleCallback(persistWorkspace, {
+        timeout: 2500,
       });
-    }, 450);
-    return () => window.clearTimeout(timer);
+    }, 1500);
+    return () => {
+      window.clearTimeout(timer);
+      if (idleSave !== null) window.cancelIdleCallback(idleSave);
+    };
   }, [
     activeTab,
     allNodes,
@@ -2408,15 +2417,17 @@ export default function ModelViewer() {
       z: point.z * inchesPerModelUnit,
     });
     const entities = dxfFaces(elementSkin.surfaces, toInches);
-    rebarRuns.forEach((run) =>
+    rebarRuns.forEach((run) => {
+      const standard = rebarBendStandard(run.barNumber);
       entities.push(
-        ...dxfRebarLines(
+        ...dxfRebarSolids(
           bentInstancesForRun(run),
           currentToInches,
+          standard.diameterInches,
           `REBAR_${run.name}`,
         ),
-      ),
-    );
+      );
+    });
     downloadBlob(
       new Blob([createDxf(entities)], {
         type: "application/dxf;charset=utf-8",
@@ -3594,13 +3605,16 @@ export default function ModelViewer() {
     setRebarSplayScope(source.advanced?.splay?.scope ?? "all");
     setRebarSplayLastCount(source.advanced?.splay?.count ?? 5);
     setRebarVariableLengthEnabled(
-      Boolean(source.advanced?.variableLength),
+      Boolean(source.advanced?.variableLength) &&
+        !Boolean(source.advanced?.splay),
     );
     setRebarEndpointAnchors(
-      source.advanced?.variableLength?.endpointAnchors.map((anchor) => ({
-        ...anchor,
-        point: { ...anchor.point },
-      })) ?? [],
+      source.advanced?.splay
+        ? []
+        : source.advanced?.variableLength?.endpointAnchors.map((anchor) => ({
+            ...anchor,
+            point: { ...anchor.point },
+          })) ?? [],
     );
     setAdvancedAnchorPickingId(null);
     setSelectedRebarRunIds(new Set([source.id]));
@@ -3657,13 +3671,15 @@ export default function ModelViewer() {
     setRebarSplayScope(run.advanced?.splay?.scope ?? "all");
     setRebarSplayLastCount(run.advanced?.splay?.count ?? 5);
     setRebarVariableLengthEnabled(
-      Boolean(run.advanced?.variableLength),
+      Boolean(run.advanced?.variableLength) && !Boolean(run.advanced?.splay),
     );
     setRebarEndpointAnchors(
-      run.advanced?.variableLength?.endpointAnchors.map((anchor) => ({
-        ...anchor,
-        point: { ...anchor.point },
-      })) ?? [],
+      run.advanced?.splay
+        ? []
+        : run.advanced?.variableLength?.endpointAnchors.map((anchor) => ({
+            ...anchor,
+            point: { ...anchor.point },
+          })) ?? [],
     );
     setAdvancedAnchorPickingId(null);
     setSelectedRebarRunIds(new Set([run.id]));
@@ -3785,7 +3801,9 @@ export default function ModelViewer() {
         endpoint,
       ]);
       setRebarPhase("path-review");
-      setStatus("Keypoint added. Add another depth and anchor, or complete the path.");
+      setStatus(
+        "Path keypoint added. Add another plane position and path anchor, or confirm the spacing path.",
+      );
     }
   };
 
@@ -3812,6 +3830,12 @@ export default function ModelViewer() {
       !pathStart ||
       !pathEnd
     ) {
+      return;
+    }
+    if (rebarSplayEnabled && rebarVariableLengthEnabled) {
+      setError(
+        "Splayed runs and varying-length runs cannot be combined. Choose one advanced geometry method.",
+      );
       return;
     }
     const pathDelta = subtract(pathEnd, pathStart);
@@ -6549,7 +6573,7 @@ export default function ModelViewer() {
                         ? editShapeChanged
                           ? "Update Rebar Shape"
                           : "Rebar Shape OK"
-                        : "Confirm Rebar"}
+                        : "Confirm Bar Shape"}
                     </button>
                   </section>
                 )}
@@ -6796,6 +6820,9 @@ export default function ModelViewer() {
                             );
                             setChoosingSplayPlane(true);
                             setRebarSplayEnabled(true);
+                            setRebarVariableLengthEnabled(false);
+                            setRebarEndpointAnchors([]);
+                            setAdvancedAnchorPickingId(null);
                             setHoveredSplayPlaneId(null);
                             setPreviewedRebarPlaneId(null);
                             if (!existingSplay) {
@@ -6809,8 +6836,8 @@ export default function ModelViewer() {
                         }}
                       >
                         {choosingSplayPlane
-                          ? "Cancel Other Plane"
-                          : "Choose Other Plane"}
+                          ? "Cancel Splay Target"
+                          : "Choose Splay Target Plane"}
                       </button>
                       <button
                         className="button dark-confirm"
@@ -6909,7 +6936,7 @@ export default function ModelViewer() {
                         }}
                         title="Continue the distribution path through another section"
                       >
-                        Add another keypoint
+                        Add Path Keypoint
                       </button>
                       <button
                         className="button primary"
@@ -6923,7 +6950,7 @@ export default function ModelViewer() {
                           ? editPathChanged
                             ? "Update Path"
                             : "Path OK"
-                          : "Complete Path"}
+                          : "Confirm Spacing Path"}
                       </button>
                     </div>
                   </section>
@@ -7075,6 +7102,11 @@ export default function ModelViewer() {
                               onChange={(event) => {
                                 const enabled = event.target.checked;
                                 setRebarSplayEnabled(enabled);
+                                if (enabled) {
+                                  setRebarVariableLengthEnabled(false);
+                                  setRebarEndpointAnchors([]);
+                                  setAdvancedAnchorPickingId(null);
+                                }
                                 if (enabled && !rebarSplayTargetPlaneId) {
                                   setRebarSplayTargetPlaneId(
                                     rebarPlanes.find(
@@ -7217,6 +7249,7 @@ export default function ModelViewer() {
                             <input
                               type="checkbox"
                               checked={rebarVariableLengthEnabled}
+                              disabled={rebarSplayEnabled}
                               onChange={(event) => {
                                 const enabled = event.target.checked;
                                 setRebarVariableLengthEnabled(enabled);
@@ -7234,8 +7267,9 @@ export default function ModelViewer() {
                             <span>
                               <strong>Vary bar length</strong>
                               <small>
-                                Vary only the last point you drew. Draw from the
-                                fixed side toward the side whose length changes.
+                                {rebarSplayEnabled
+                                  ? "Unavailable for a splayed run."
+                                  : "Vary only the terminal point. Draw from the fixed side toward the side whose length changes."}
                               </small>
                             </span>
                           </label>
@@ -7270,9 +7304,9 @@ export default function ModelViewer() {
                                         </strong>
                                       ) : (
                                         <label
-                                          title="Run % locates this additional endpoint vertex between the first and last bars in the run."
+                                          title="Run position locates this additional endpoint vertex between the first and last bars in the run."
                                         >
-                                          <span>Run %</span>
+                                          <span>Run position (%)</span>
                                           <DraftNumberInput
                                             min={0.1}
                                             max={99.9}
@@ -7365,7 +7399,7 @@ export default function ModelViewer() {
                                   onClick={addVariableLengthAnchor}
                                   disabled={rebarEndpointAnchors.length < 2}
                                 >
-                                  Additional Vertex
+                                  Additional Endpoint Vertex
                                 </button>
                                 <button
                                   type="button"
@@ -7391,7 +7425,7 @@ export default function ModelViewer() {
                         ? editingRebarChanged
                           ? "Update Bar"
                           : "Bar OK"
-                        : "Really Finish Bar"}
+                        : "Create Bar Run"}
                     </button>
                   </section>
                 )}
@@ -7802,6 +7836,13 @@ export default function ModelViewer() {
           }
           showAxes={activeTab === "setup"}
           onPickRebarPoint={pickRebarWorkflowPoint}
+          onRejectRebarPoint={() => {
+            if (rebarPhase === "path-start") {
+              setStatus(
+                "The first spacing-path anchor must lie on the completed bar. Move over the gold-highlighted bar and click again.",
+              );
+            }
+          }}
           elementEditMode={elementEditMode}
           selectedElementIds={[...selectedElementIds]}
           onPickElement={toggleElementSelection}
