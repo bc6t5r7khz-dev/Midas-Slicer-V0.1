@@ -26,16 +26,15 @@ type BendTemplate = {
   type: `N${number}`;
   labels: ScheduleLetter[];
   turns: number[];
-  optionalStart?: boolean;
-  optionalEnd?: boolean;
+  preferredOmissions?: ScheduleLetter[];
   derived?: ScheduleLetter[];
 };
 
 // Signed turns and letter order follow the NHDOT standard bend sheet. The
 // matcher also tests mirrored, reversed, and permitted terminal-omission forms.
 const NHDOT_TEMPLATES: BendTemplate[] = [
-  { type: "N1", labels: ["A", "B", "C", "D", "G"], turns: [90, -90, -90, -90], optionalStart: true, optionalEnd: true, derived: ["R"] },
-  { type: "N2", labels: ["B", "C", "D", "E"], turns: [-90, 90, 45], derived: ["H", "K"] },
+  { type: "N1", labels: ["A", "B", "C", "D", "G"], turns: [90, -90, -90, -90], preferredOmissions: ["A", "G"], derived: ["R"] },
+  { type: "N2", labels: ["B", "C", "D", "E"], turns: [90, 90, 45], derived: ["H", "K"] },
   { type: "N3", labels: ["B", "D", "C"], turns: [90, 135], derived: ["K", "R"] },
   { type: "N4", labels: ["B", "C", "D"], turns: [135, -135], derived: ["H", "K"] },
   { type: "N5", labels: ["C", "B", "D"], turns: [45, 90] },
@@ -199,26 +198,78 @@ type Candidate = {
   omitted: string[];
 };
 
-const templateForms = (template: BendTemplate) => {
-  const omissions = [
-    { start: false, end: false },
-    ...(template.optionalStart ? [{ start: true, end: false }] : []),
-    ...(template.optionalEnd ? [{ start: false, end: true }] : []),
-    ...(template.optionalStart && template.optionalEnd ? [{ start: true, end: true }] : []),
-  ];
-  return omissions.flatMap(({ start, end }) => {
-    const labels = template.labels.slice(start ? 1 : 0, end ? -1 : undefined);
-    const turns = template.turns.slice(start ? 1 : 0, end ? -1 : undefined);
-    const omitted = [start ? template.labels[0] : null, end ? template.labels[template.labels.length - 1] : null].filter(Boolean) as string[];
-    return [false, true].flatMap((reversed) =>
-      [false, true].map((mirrored) => {
-        const orderedLabels = reversed ? [...labels].reverse() : labels;
-        let orderedTurns = reversed ? [...turns].reverse().map((turn) => -turn) : turns;
-        if (mirrored) orderedTurns = orderedTurns.map((turn) => -turn);
-        return { labels: orderedLabels, turns: orderedTurns, reversed, mirrored, omitted };
-      }),
-    );
-  });
+const signedTurn = (angle: number) =>
+  ((angle + 180) % 360 + 360) % 360 - 180;
+
+const indexSelections = (
+  total: number,
+  count: number,
+  start = 0,
+  prefix: number[] = [],
+): number[][] => {
+  if (prefix.length === count) return [prefix];
+  const remaining = count - prefix.length;
+  const result: number[][] = [];
+  for (let index = start; index <= total - remaining; index += 1) {
+    result.push(...indexSelections(total, count, index + 1, [...prefix, index]));
+  }
+  return result;
+};
+
+/**
+ * Produces orientation-independent versions of a standard shape. Up to two
+ * zero-length/missing legs may be omitted anywhere in the standard. This
+ * models the drafting convention of using the nearest standard bend even when
+ * one or two nominal legs collapse, rather than maintaining one-off exceptions
+ * for individual bars.
+ */
+const templateForms = (template: BendTemplate, observedSegmentCount: number) => {
+  const omittedCount = template.labels.length - observedSegmentCount;
+  if (omittedCount < 0 || omittedCount > 2 || observedSegmentCount < 2) {
+    return [];
+  }
+  const directions = [0];
+  template.turns.forEach((turn) =>
+    directions.push(directions[directions.length - 1] + turn),
+  );
+  return indexSelections(template.labels.length, observedSegmentCount).flatMap(
+    (indices) => {
+      const retained = new Set(indices);
+      const labels = indices.map((index) => template.labels[index]);
+      const retainedDirections = indices.map((index) => directions[index]);
+      const turns = retainedDirections
+        .slice(1)
+        .map((direction, index) =>
+          signedTurn(direction - retainedDirections[index]),
+        );
+      const omitted = template.labels.filter((_, index) => !retained.has(index));
+      const firstRetained = indices[0];
+      const lastRetained = indices[indices.length - 1];
+      const omissionPenalty = template.labels.reduce((penalty, label, index) => {
+        if (retained.has(index)) return penalty;
+        if (template.preferredOmissions?.includes(label)) return penalty + 0.5;
+        const outsideRetainedSpan = index < firstRetained || index > lastRetained;
+        return penalty + (outsideRetainedSpan ? 2.5 : 4.5);
+      }, 0);
+      return [false, true].flatMap((reversed) =>
+        [false, true].map((mirrored) => {
+          const orderedLabels = reversed ? [...labels].reverse() : labels;
+          let orderedTurns = reversed
+            ? [...turns].reverse().map((turn) => -turn)
+            : turns;
+          if (mirrored) orderedTurns = orderedTurns.map((turn) => -turn);
+          return {
+            labels: orderedLabels,
+            turns: orderedTurns,
+            reversed,
+            mirrored,
+            omitted,
+            omissionPenalty,
+          };
+        }),
+      );
+    },
+  );
 };
 
 export type BarClassification = {
@@ -247,11 +298,10 @@ export function classifyNhdotBar(
   }
   const candidates: Candidate[] = [];
   for (const template of NHDOT_TEMPLATES) {
-    for (const form of templateForms(template)) {
+    for (const form of templateForms(template, geometry.segmentLengths.length)) {
       if (form.labels.length !== geometry.segmentLengths.length || form.turns.length !== geometry.turns.length) continue;
       const anglePenalty = form.turns.reduce((sum, turn, index) => sum + angleDifference(turn, geometry.turns[index]) / 5, 0);
-      const omissionPenalty = form.omitted.length * 3;
-      candidates.push({ template, ...form, score: anglePenalty + omissionPenalty });
+      candidates.push({ template, ...form, score: anglePenalty + form.omissionPenalty });
     }
   }
   candidates.sort((a, b) => a.score - b.score);
@@ -290,13 +340,13 @@ export function classifyNhdotBar(
   }
   return {
     type: best.template.type,
-    confidence: best.score <= 4 ? "Confirmed" : "Likely",
+    confidence: best.score <= 4 && best.omitted.length === 0 ? "Confirmed" : "Likely",
     score: best.score,
     mirrored: best.mirrored,
     reversed: best.reversed,
     legDimensionsInches,
     cleanup: geometry.cleanup,
-    notes: best.omitted.length ? [`Optional ${best.omitted.join(" and ")} leg omitted`] : [],
+    notes: best.omitted.length ? [`Nearest standard with ${best.omitted.join(" and ")} leg${best.omitted.length === 1 ? "" : "s"} omitted`] : [],
     cleanedVertexCount: geometry.points.length,
   };
 }
@@ -403,28 +453,28 @@ export function buildRebarScheduleWorkbookXml(
   const quantityHeaders = ["Mark", "Size", "Length From Above (ft)", "# Pieces", "Total Length (ft)", "Unit Wt. (lb/ft)", "Total Weight (lb)", "Classification"];
   const quantityRows = rows.map((row, index) => {
     const excelRow = index + 4;
-    const totalLength = Math.round(row.lengthFeet * row.quantity);
+    const totalLength = row.lengthFeet * row.quantity;
     const unitWeight = NHDOT_UNIT_WEIGHTS_LB_PER_FT[row.barNumber] ?? 0;
-    const totalWeight = Math.round(totalLength * unitWeight);
+    const totalWeight = totalLength * unitWeight;
     return rowXml([
       stringCell(row.mark),
       stringCell(`#${row.barNumber}`, "Center"),
       formulaCell(`='Bar Schedule'!R${excelRow}C3`, row.lengthFeet, "TwoDecimal"),
       formulaCell(`='Bar Schedule'!R${excelRow}C4`, row.quantity, "IntegerFormula"),
-      formulaCell("=ROUND(RC[-2]*RC[-1],0)", totalLength, "IntegerFormula"),
+      formulaCell("=RC[-2]*RC[-1]", totalLength, "TwoDecimalFormula"),
       formulaCell("=IFERROR(VLOOKUP(RC[-4],Reference!R3C1:R13C2,2,FALSE),0)", unitWeight, "ThreeDecimalFormula"),
-      formulaCell("=ROUND(RC[-2]*RC[-1],0)", totalWeight, "IntegerFormula"),
+      formulaCell("=RC[-2]*RC[-1]", totalWeight, "TwoDecimalFormula"),
       stringCell(row.confidence, "Center"),
     ]);
   }).join("");
   const quantityTotalRow = rows.length + 4;
   const quantityTotals = rowXml([
     stringCell("TOTAL", "Total"), stringCell("", "Total"), stringCell("", "Total"), stringCell("", "Total"),
-    formulaCell(`=SUM(R4C5:R${quantityTotalRow - 1}C5)`, rows.reduce((sum, row) => sum + Math.round(row.lengthFeet * row.quantity), 0), "TotalNumber"),
+    formulaCell(`=SUM(R4C5:R${quantityTotalRow - 1}C5)`, rows.reduce((sum, row) => sum + row.lengthFeet * row.quantity, 0), "TotalNumber"),
     stringCell("", "Total"),
     formulaCell(`=SUM(R4C7:R${quantityTotalRow - 1}C7)`, rows.reduce((sum, row) => {
-      const totalLength = Math.round(row.lengthFeet * row.quantity);
-      return sum + Math.round(totalLength * (NHDOT_UNIT_WEIGHTS_LB_PER_FT[row.barNumber] ?? 0));
+      const totalLength = row.lengthFeet * row.quantity;
+      return sum + totalLength * (NHDOT_UNIT_WEIGHTS_LB_PER_FT[row.barNumber] ?? 0);
     }, 0), "TotalNumber"),
     stringCell("", "Total"),
   ]);
@@ -439,12 +489,12 @@ export function buildRebarScheduleWorkbookXml(
   const weights = Object.entries(NHDOT_UNIT_WEIGHTS_LB_PER_FT);
   const referenceRows = weights.map(([barNumber, weight]) => rowXml([stringCell(`#${barNumber}`, "Center"), numberCell(weight, "ThreeDecimal")])).join("");
   const summaryRows = weights.map(([barNumber, weight]) => {
-    const total = rows.reduce((sum, row) => row.barNumber === barNumber ? sum + Math.round(Math.round(row.lengthFeet * row.quantity) * weight) : sum, 0);
+    const total = rows.reduce((sum, row) => row.barNumber === barNumber ? sum + row.lengthFeet * row.quantity * weight : sum, 0);
     return rowXml([
       stringCell(`#${barNumber}`, "Center"),
       numberCell(weight, "ThreeDecimal"),
-      formulaCell(`=SUMIF(Quantities!R4C2:R${quantityTotalRow - 1}C2,RC[-2],Quantities!R4C7:R${quantityTotalRow - 1}C7)`, total, "IntegerFormula"),
-      formulaCell(`=SUMIF(Quantities!R4C2:R${quantityTotalRow - 1}C2,RC[-3],Quantities!R4C5:R${quantityTotalRow - 1}C5)`, rows.reduce((sum, row) => row.barNumber === barNumber ? sum + Math.round(row.lengthFeet * row.quantity) : sum, 0), "IntegerFormula"),
+      formulaCell(`=SUMIF(Quantities!R4C2:R${quantityTotalRow - 1}C2,RC[-2],Quantities!R4C7:R${quantityTotalRow - 1}C7)`, total, "TwoDecimalFormula"),
+      formulaCell(`=SUMIF(Quantities!R4C2:R${quantityTotalRow - 1}C2,RC[-3],Quantities!R4C5:R${quantityTotalRow - 1}C5)`, rows.reduce((sum, row) => row.barNumber === barNumber ? sum + row.lengthFeet * row.quantity : sum, 0), "TwoDecimalFormula"),
     ]);
   }).join("");
 
@@ -470,7 +520,7 @@ export function buildRebarScheduleWorkbookXml(
 <Style ss:ID="ThreeDecimalFormula" ss:Parent="Formula"><NumberFormat ss:Format="0.000"/></Style>
 <Style ss:ID="IntegerFormula" ss:Parent="Formula"><NumberFormat ss:Format="0"/></Style>
 <Style ss:ID="Total"><Borders><Border ss:Position="Top" ss:LineStyle="Double" ss:Weight="3"/></Borders><Font ss:Bold="1"/></Style>
-<Style ss:ID="TotalNumber" ss:Parent="Total"><Interior ss:Color="#FFF8D8" ss:Pattern="Solid"/><NumberFormat ss:Format="0"/></Style>
+<Style ss:ID="TotalNumber" ss:Parent="Total"><Interior ss:Color="#FFF8D8" ss:Pattern="Solid"/><NumberFormat ss:Format="0.00"/></Style>
 </Styles>
 <Worksheet ss:Name="Bar Schedule"><Table>${columns([80,45,65,55,50,...LETTERS.map(() => 42),65,65])}${rowXml([stringCell(`${title} - Bar Summary`, "Title")])}${rowXml([stringCell("NHDOT standard bend dimensions; blank Type indicates a straight bar.", "Wrap")])}${headerRow(scheduleHeaders)}${scheduleRows}</Table>${worksheetOptions}</Worksheet>
 <Worksheet ss:Name="Quantities"><Table>${columns([90,48,90,60,85,80,90,80])}${rowXml([stringCell(`${title} - Reinforcing Steel Quantities`, "Title")])}${rowXml([stringCell("Yellow cells contain auditable Excel formulas.", "Wrap")])}${headerRow(quantityHeaders)}${quantityRows}${quantityTotals}</Table>${worksheetOptions}</Worksheet>

@@ -799,6 +799,7 @@ export default function PointCloudViewport({
   const onRemoveFaceVertexRef = useRef(onRemoveFaceVertex);
   const onInsertFaceVertexRef = useRef(onInsertFaceVertex);
   const elementEditModeRef = useRef(elementEditMode);
+  const detailModeRef = useRef(detailMode);
   const onPickElementRef = useRef(onPickElement);
   const rebarDrawingRef = useRef(rebarDrawing);
   const onPickRebarPointRef = useRef(onPickRebarPoint);
@@ -854,6 +855,7 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
   onRemoveFaceVertexRef.current = onRemoveFaceVertex;
   onInsertFaceVertexRef.current = onInsertFaceVertex;
   elementEditModeRef.current = elementEditMode;
+  detailModeRef.current = detailMode;
   onPickElementRef.current = onPickElement;
   rebarDrawingRef.current = rebarDrawing;
   onPickRebarPointRef.current = onPickRebarPoint;
@@ -1556,7 +1558,7 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
           onHoverFaceRef.current(null);
           return;
         }
-        if (orbitDrag && !edgeDrag) {
+        if (orbitDrag && !edgeDrag && !detailModeRef.current) {
           rotateNaturally(
             event.clientX - orbitDrag.x,
             event.clientY - orbitDrag.y,
@@ -1745,6 +1747,10 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
           pointerStart = { x: event.clientX, y: event.clientY };
         }
         if (event.button !== 0) return;
+        if (detailModeRef.current) {
+          renderer.domElement.style.cursor = "default";
+          return;
+        }
         updatePointer(event);
         const edgeHit = editableFaceIdRef.current
           ? raycaster
@@ -3640,6 +3646,95 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
     );
   };
 
+  const detailPointAtScreen = (
+    point: ScreenPoint,
+    width: number,
+    height: number,
+  ) => {
+    const state = sceneRef.current;
+    if (!state || !rebarSectionView) return null;
+    state.camera.updateMatrixWorld(true);
+    const pointer = new THREE.Vector2(
+      (point.x / Math.max(width, 1)) * 2 - 1,
+      -(point.y / Math.max(height, 1)) * 2 + 1,
+    );
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(pointer, state.camera);
+    const planePoint = toThree(rebarSectionView.origin, displayOffset);
+    const planeNormal = new THREE.Vector3(
+      rebarSectionView.normal.x,
+      rebarSectionView.normal.y,
+      rebarSectionView.normal.z,
+    ).normalize();
+    const intersection = raycaster.ray.intersectPlane(
+      new THREE.Plane().setFromNormalAndCoplanarPoint(
+        planeNormal,
+        planePoint,
+      ),
+      new THREE.Vector3(),
+    );
+    if (!intersection) return null;
+    const currentPoint = {
+      x: intersection.x + displayOffset.x,
+      y: intersection.y + displayOffset.y,
+      z: intersection.z + displayOffset.z,
+    };
+    return reframePoint(currentPoint, basis, null);
+  };
+
+  const projectDetailNoteTarget = (
+    note: DetailNote,
+    width: number,
+    height: number,
+  ): ScreenPoint => {
+    const state = sceneRef.current;
+    if (!state || !note.objectTarget) {
+      return { x: note.target.x * width, y: note.target.y * height };
+    }
+    const currentPoint = reframePoint(note.objectTarget, null, basis);
+    const projected = toThree(currentPoint, displayOffset).project(state.camera);
+    return {
+      x: (projected.x * 0.5 + 0.5) * width,
+      y: (-projected.y * 0.5 + 0.5) * height,
+    };
+  };
+
+  useEffect(() => {
+    if (
+      !detailMode ||
+      !rebarSectionView ||
+      !detailNotes.some((note) => !note.objectTarget)
+    ) {
+      return;
+    }
+    const host = hostRef.current;
+    if (!host?.clientWidth || !host.clientHeight) return;
+    let changed = false;
+    const migrated = detailNotes.map((note) => {
+      if (note.objectTarget) return note;
+      const objectTarget = detailPointAtScreen(
+        {
+          x: note.target.x * host.clientWidth,
+          y: note.target.y * host.clientHeight,
+        },
+        host.clientWidth,
+        host.clientHeight,
+      );
+      if (!objectTarget) return note;
+      changed = true;
+      return { ...note, objectTarget };
+    });
+    if (changed) onDetailNotesChange(migrated);
+  }, [
+    basis,
+    detailMode,
+    detailNotes,
+    detailProjectionRevision,
+    displayOffset,
+    onDetailNotesChange,
+    rebarSectionView,
+  ]);
+
   const handleDetailPointerMove = (
     event: ReactPointerEvent<SVGSVGElement>,
   ) => {
@@ -3698,24 +3793,11 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
     }
     const initial = detailDrag.initial;
     if (detailDrag.kind === "note-target") {
-      const allSegments = detailScreenGraphics.flatMap(
-        (graphic) => graphic.segments,
-      );
-      const nearest = nearestDetailTarget(point, allSegments);
-      const segment = allSegments[nearest.segmentIndex];
-      const snapped = segment
-        ? {
-            x:
-              segment[0].x +
-              (segment[1].x - segment[0].x) * nearest.fraction,
-            y:
-              segment[0].y +
-              (segment[1].y - segment[0].y) * nearest.fraction,
-          }
-        : point;
+      const objectTarget = detailPointAtScreen(point, rect.width, rect.height);
       updateDetailNote(detailDrag.id, {
         ...initial,
-        target: { x: snapped.x / rect.width, y: snapped.y / rect.height },
+        target: { x: point.x / rect.width, y: point.y / rect.height },
+        ...(objectTarget ? { objectTarget } : {}),
       });
     } else if (detailDrag.kind === "note-label") {
       updateDetailNote(detailDrag.id, {
@@ -3787,10 +3869,17 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
               x: event.clientX - rect.left,
               y: event.clientY - rect.top,
             };
+            const objectTarget = detailPointAtScreen(
+              target,
+              rect.width,
+              rect.height,
+            );
+            if (!objectTarget) return;
             onPlaceDetailNote({
               id: `detail-note-${crypto.randomUUID()}`,
               text: pendingDetailNoteText,
               target: { x: target.x / rect.width, y: target.y / rect.height },
+              objectTarget,
               leader: {
                 x: Math.min(0.98, (target.x + 46) / rect.width),
                 y: Math.max(0.02, (target.y - 38) / rect.height),
@@ -4046,7 +4135,7 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
             const host = hostRef.current;
             const width = Math.max(host?.clientWidth ?? 1, 1);
             const height = Math.max(host?.clientHeight ?? 1, 1);
-            const target = { x: note.target.x * width, y: note.target.y * height };
+            const target = projectDetailNoteTarget(note, width, height);
             const label = { x: note.label.x * width, y: note.label.y * height };
             const textDirection = label.x >= target.x ? 1 : -1;
             const textAnchor = textDirection > 0 ? "start" : "end";

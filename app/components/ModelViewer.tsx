@@ -617,6 +617,7 @@ export default function ModelViewer() {
   const [pendingDetailNoteText, setPendingDetailNoteText] = useState<
     string | null
   >(null);
+  const previousActiveTabRef = useRef<WorkflowTab>("setup");
   const [selectedSlicePinId, setSelectedSlicePinId] =
     useState<string | null>(null);
   const [selectedSlicePinIds, setSelectedSlicePinIds] = useState<Set<string>>(
@@ -749,7 +750,17 @@ export default function ModelViewer() {
   }, [slice]);
 
   useEffect(() => {
-    if (activeTab !== "details") setPendingDetailNoteText(null);
+    const previous = previousActiveTabRef.current;
+    if (previous === "details" && activeTab !== "details") {
+      setPendingDetailNoteText(null);
+      setActiveSlicePinId(null);
+      setSelectedSlicePinId(null);
+      setSelectedSlicePinIds(new Set());
+      setSelectedSlicingPlaneId(null);
+      setSelectedSlicingPlaneIds(new Set());
+      setSlicePreviewActive(false);
+    }
+    previousActiveTabRef.current = activeTab;
   }, [activeTab]);
 
   const tolerance = globalBounds ? modelTolerance(globalBounds) : 1e-6;
@@ -7456,7 +7467,39 @@ export default function ModelViewer() {
                         )}
                       </div>
                     </div>
-                    <div className="bar-run-list">
+                    <div
+                      className="bar-run-list"
+                      onDragOver={(event) => {
+                        if (
+                          event.target instanceof Element &&
+                          event.target.closest(".bar-run-group")
+                        ) {
+                          return;
+                        }
+                        if (
+                          event.dataTransfer.types.includes(
+                            "application/x-mct-rebar-run",
+                          )
+                        ) {
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = "move";
+                        }
+                      }}
+                      onDrop={(event) => {
+                        if (
+                          event.target instanceof Element &&
+                          event.target.closest(".bar-run-group")
+                        ) {
+                          return;
+                        }
+                        const runId = event.dataTransfer.getData(
+                          "application/x-mct-rebar-run",
+                        );
+                        if (!runId) return;
+                        event.preventDefault();
+                        moveRebarRunToGroup(runId, undefined);
+                      }}
+                    >
                       {rebarGroups.map((group) => {
                         const groupRuns = rebarRuns.filter(
                           (run) => run.groupId === group.id,
@@ -7482,6 +7525,7 @@ export default function ModelViewer() {
                               );
                               if (!runId) return;
                               event.preventDefault();
+                              event.stopPropagation();
                               moveRebarRunToGroup(runId, group.id);
                             }}
                           >
@@ -7593,6 +7637,7 @@ export default function ModelViewer() {
                           );
                           if (!runId) return;
                           event.preventDefault();
+                          event.stopPropagation();
                           moveRebarRunToGroup(runId, undefined);
                         }}
                       >
@@ -7678,8 +7723,8 @@ export default function ModelViewer() {
                   </div>
                   {pendingDetailNoteText && (
                     <p className="detail-note-placement-help">
-                      Move into the drawing and click the arrow location. Press
-                      Escape to cancel.
+                      Click any point on the section. The arrow stays attached
+                      to that model location; press Escape to cancel.
                     </p>
                   )}
                   {activeDetail.notes.map((note) => (

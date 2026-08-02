@@ -87,7 +87,7 @@ button {
   align-items: center;
   border-bottom: 1px solid var(--line);
   background: #0a151d;
-  z-index: 10;
+  z-index: 35;
 }
 
 .brand {
@@ -657,7 +657,7 @@ button {
 }
 
 .bar-run-ungrouped {
-  min-height: 12px;
+  min-height: 44px;
 }
 
 .add-group-button {

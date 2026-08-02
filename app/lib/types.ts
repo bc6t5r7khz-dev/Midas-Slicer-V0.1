@@ -130,7 +130,10 @@ export type DetailNote = {
   text: string;
   label: { x: number; y: number };
   leader: { x: number; y: number };
+  /** Legacy normalized screen location retained for older project files. */
   target: { x: number; y: number };
+  /** Stable model-coordinate arrow location used by newly placed notes. */
+  objectTarget?: Vec3;
 };
 
 export type SlicePin = {

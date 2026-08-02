@@ -77,9 +77,41 @@ test("recognizes the simplified N1 form with optional terminal legs omitted", ()
     1,
     "5",
   );
-  assert.equal(result.type, "N1");
+  assert.equal(result.type, "N1", JSON.stringify(result));
   assert.equal(result.confidence, "Likely");
-  assert.match(result.notes.join(" "), /optional/i);
+  assert.match(result.notes.join(" "), /omitted/i);
+});
+
+test("recognizes an N11 when unused terminal legs collapse", () => {
+  const result = classifyNhdotBar(
+    line([
+      { x: 0, y: 0, z: 0 },
+      { x: 4, y: 0, z: 0 },
+      { x: 8, y: 4, z: 0 },
+      { x: 22, y: 4, z: 0 },
+    ]),
+    1,
+    "5",
+  );
+  assert.equal(result.type, "N11", JSON.stringify(result));
+  assert.equal(result.confidence, "Likely");
+  assert.match(result.notes.join(" "), /omitted/i);
+});
+
+test("recognizes N2 using its consistent three-turn topology", () => {
+  const result = classifyNhdotBar(
+    line([
+      { x: 0, y: 0, z: 0 },
+      { x: 8, y: 0, z: 0 },
+      { x: 8, y: 5, z: 0 },
+      { x: 5, y: 5, z: 0 },
+      { x: 1, y: 1, z: 0 },
+    ]),
+    1,
+    "5",
+  );
+  assert.equal(result.type, "N2");
+  assert.equal(result.confidence, "Confirmed");
 });
 
 test("classifies the five-leg crown form as N11", () => {
@@ -108,7 +140,7 @@ test("creates a formula-driven multi-sheet hand-calculation workbook", () => {
     lines: line([
       { x: 0, y: 0, z: 0 },
       { x: 10, y: 0, z: 0 },
-      { x: 10, y: -5, z: 0 },
+      { x: 10, y: -5.49, z: 0 },
     ]),
     positions: [0, 12],
     axis: "x",
@@ -124,11 +156,19 @@ test("creates a formula-driven multi-sheet hand-calculation workbook", () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0].quantity, 2);
   assert.equal(rows[0].type, "N8");
+  assert.equal(rows[0].lengthFeet, 1.25, "individual length rounds to 15 inches");
   const workbook = buildRebarScheduleWorkbookXml(rows, "Abutment B.mct");
   assert.match(workbook, /Worksheet ss:Name="Bar Schedule"/);
   assert.match(workbook, /Worksheet ss:Name="Quantities"/);
   assert.match(workbook, /Worksheet ss:Name="Classification Review"/);
-  assert.match(workbook, /ss:Formula="=ROUND\(RC\[-2\]\*RC\[-1\],0\)"/);
+  assert.match(workbook, /ss:Formula="=RC\[-2\]\*RC\[-1\]"/);
+  assert.doesNotMatch(workbook, /ROUND\(RC\[-2\]\*RC\[-1\],0\)/);
+  assert.match(
+    workbook,
+    /ss:Formula="=RC\[-2\]\*RC\[-1\]"><Data ss:Type="Number">2\.5<\/Data>/,
+    "total length keeps the unrounded 2.5 ft result",
+  );
+  assert.match(workbook, />2\.6075<\/Data>/, "total weight remains unrounded");
   assert.match(workbook, /VLOOKUP/);
   assert.match(workbook, /Reference!R3C1:R13C2/);
   assert.match(workbook, /#5101E/);
