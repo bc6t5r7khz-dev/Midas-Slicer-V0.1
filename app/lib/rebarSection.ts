@@ -9,6 +9,13 @@ export type SectionCircle = {
   center: Vec3;
 };
 
+export type SectionRebarGeometry = {
+  projectedLines: SectionLine[];
+  circles: SectionCircle[];
+  /** A bar with both in-plane and depth-travelling legs. */
+  mixed: boolean;
+};
+
 const add = (a: Vec3, b: Vec3): Vec3 => ({
   x: a.x + b.x,
   y: a.y + b.y,
@@ -83,7 +90,8 @@ export function sectionRebarGeometry(
   planeOrigin: Vec3,
   planeNormalInput: Vec3,
   throwDepthModelUnits: number,
-) {
+  preferredUpInput: Vec3 = { x: 0, y: 0, z: 1 },
+): SectionRebarGeometry {
   const normal = normalize(planeNormalInput);
   const depth = Math.max(throwDepthModelUnits, 0);
   const projectedLines: SectionLine[] = [];
@@ -100,14 +108,115 @@ export function sectionRebarGeometry(
     }
   };
 
-  for (const line of lines) {
+  type Segment = {
+    start: Vec3;
+    end: Vec3;
+    lineIndex: number;
+    segmentIndex: number;
+    projectedStart: Vec3;
+    projectedEnd: Vec3;
+    startDistance: number;
+    endDistance: number;
+    normalAlignment: number;
+    depthTravelling: boolean;
+  };
+  const segments: Segment[] = [];
+  lines.forEach((line, lineIndex) => {
     const segmentCount =
       line.points.length - 1 + (line.closed && line.points.length > 2 ? 1 : 0);
-    for (let index = 0; index < segmentCount; index += 1) {
-      const start = line.points[index];
-      const end = line.points[(index + 1) % line.points.length];
+    for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
+      const start = line.points[segmentIndex];
+      const end = line.points[(segmentIndex + 1) % line.points.length];
       const startDistance = dot(subtract(start, planeOrigin), normal);
       const endDistance = dot(subtract(end, planeOrigin), normal);
+      const segmentLength = length(subtract(end, start));
+      const normalAlignment = segmentLength > tolerance
+        ? Math.abs(endDistance - startDistance) / segmentLength
+        : 0;
+      segments.push({
+        start,
+        end,
+        lineIndex,
+        segmentIndex,
+        projectedStart: projectToPlane(start, planeOrigin, normal),
+        projectedEnd: projectToPlane(end, planeOrigin, normal),
+        startDistance,
+        endDistance,
+        normalAlignment,
+        depthTravelling: normalAlignment >= 0.5,
+      });
+    }
+  });
+
+  const mixed =
+    segments.some((segment) => segment.depthTravelling) &&
+    segments.some(
+      (segment) =>
+        !segment.depthTravelling &&
+        length(subtract(segment.projectedEnd, segment.projectedStart)) > tolerance,
+    );
+
+  // Elevation details commonly contain a leg in the drawing plane followed by
+  // a leg travelling into the page. For that mixed case, project the complete
+  // representative bar rather than clipping it at the section throw depth.
+  // Depth transitions remain dots; a depth-travelling leg also remains a line
+  // when its visible rise/fall exceeds ten degrees from drawing horizontal.
+  if (mixed) {
+    const axes = sectionPlaneAxes(normal, preferredUpInput);
+    const tenDegrees = (10 * Math.PI) / 180;
+    for (const segment of segments) {
+      const projectedDelta = subtract(
+        segment.projectedEnd,
+        segment.projectedStart,
+      );
+      const projectedLength = length(projectedDelta);
+      if (!segment.depthTravelling) {
+        if (projectedLength > tolerance) {
+          projectedLines.push({
+            start: segment.projectedStart,
+            end: segment.projectedEnd,
+          });
+        }
+        continue;
+      }
+
+      const siblings = segments.filter(
+        (candidate) => candidate.lineIndex === segment.lineIndex,
+      );
+      const previous = siblings.find(
+        (candidate) => candidate.segmentIndex === segment.segmentIndex - 1,
+      );
+      const next = siblings.find(
+        (candidate) => candidate.segmentIndex === segment.segmentIndex + 1,
+      );
+      if (previous && !previous.depthTravelling) {
+        addCircle(segment.projectedStart);
+      } else if (next && !next.depthTravelling) {
+        addCircle(segment.projectedEnd);
+      } else {
+        addCircle(
+          Math.abs(segment.startDistance) <= Math.abs(segment.endDistance)
+            ? segment.projectedStart
+            : segment.projectedEnd,
+        );
+      }
+
+      if (projectedLength <= tolerance) continue;
+      const horizontal = Math.abs(dot(projectedDelta, axes.right));
+      const vertical = Math.abs(dot(projectedDelta, axes.up));
+      const visibleAngle = Math.atan2(vertical, horizontal);
+      if (visibleAngle > tenDegrees) {
+        projectedLines.push({
+          start: segment.projectedStart,
+          end: segment.projectedEnd,
+        });
+      }
+    }
+    return { projectedLines, circles, mixed };
+  }
+
+  for (const segment of segments) {
+      const { start, end, startDistance, endDistance } = segment;
       const distanceDelta = endDistance - startDistance;
       const crossesCut =
         Math.abs(distanceDelta) > tolerance &&
@@ -134,11 +243,7 @@ export function sectionRebarGeometry(
       if (!clipped) continue;
       const projectedStart = projectToPlane(clipped[0], planeOrigin, normal);
       const projectedEnd = projectToPlane(clipped[1], planeOrigin, normal);
-      const segmentLength = length(subtract(end, start));
-      const normalAlignment =
-        segmentLength > tolerance
-          ? Math.abs(distanceDelta) / segmentLength
-          : 0;
+      const normalAlignment = segment.normalAlignment;
       if (normalAlignment >= 0.5) {
         const clippedStartDistance = Math.abs(
           dot(subtract(clipped[0], planeOrigin), normal),
@@ -159,9 +264,8 @@ export function sectionRebarGeometry(
           end: projectedEnd,
         });
       }
-    }
   }
-  return { projectedLines, circles };
+  return { projectedLines, circles, mixed };
 }
 
 export function sectionPlaneAxes(

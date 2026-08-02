@@ -2188,6 +2188,9 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
       segments: Array<[Vec3, Vec3]>;
       circles: Vec3[];
       lapDimensions: LapDimension[];
+      mixed: boolean;
+      dimensionRange: [Vec3, Vec3] | null;
+      representativeTarget: Vec3 | null;
     };
     const raw = new Map<string, Graphic>();
     const center = allNodes.length
@@ -2208,9 +2211,12 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
         segments: [],
         circles: [],
         lapDimensions: [],
+        mixed: false,
+        dimensionRange: null,
+        representativeTarget: null,
       };
       const candidates = (generatedRebarInstances.get(run.id) ?? []).map(
-        (instance) => {
+        (instance, index) => {
           const points = instance.flatMap((line) => line.points);
           const signedDistances = points.map((point) =>
             dot(subtractVec(point, rebarSectionView.origin), rebarSectionView.normal),
@@ -2225,6 +2231,7 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
               ? scaleVec(rebarSectionView.normal, -1)
               : rebarSectionView.normal;
           return {
+            index,
             distance: Math.abs(closestSignedDistance),
             section: sectionRebarGeometry(
               instance,
@@ -2235,10 +2242,24 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
           };
         },
       );
+      const mixedCandidates = candidates.filter(({ section }) => section.mixed);
+      const middleIndex = Math.floor(candidates.length / 2);
+      const mixedCandidate = mixedCandidates.reduce(
+        (best, candidate) =>
+          !best || Math.abs(candidate.index - middleIndex) < Math.abs(best.index - middleIndex)
+            ? candidate
+            : best,
+        null as (typeof candidates)[number] | null,
+      );
       const lineCandidate = candidates
         .filter(({ section }) => section.projectedLines.length)
         .sort((first, second) => first.distance - second.distance)[0];
-      const visibleCandidates = lineCandidate ? [lineCandidate] : candidates;
+      const visibleCandidates = mixedCandidate
+        ? [mixedCandidate]
+        : lineCandidate
+          ? [lineCandidate]
+          : candidates;
+      graphic.mixed = Boolean(mixedCandidate);
       for (const { section } of visibleCandidates) {
         section.projectedLines.forEach(({ start, end }) =>
           graphic.segments.push([start, end]),
@@ -2257,6 +2278,30 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
             graphic.circles.push(circleCenter);
           }
         });
+      }
+      if (graphic.mixed) {
+        const pathStart = run.pathPoints?.[0] ?? run.pathStart ?? null;
+        const pathEnd = run.pathPoints?.at(-1) ?? run.pathEnd ?? null;
+        const projectToSection = (point: Vec3) =>
+          subtractVec(
+            point,
+            scaleVec(
+              rebarSectionView.normal,
+              dot(subtractVec(point, rebarSectionView.origin), rebarSectionView.normal),
+            ),
+          );
+        if (pathStart && pathEnd) {
+          const projectedStart = projectToSection(pathStart);
+          const projectedEnd = projectToSection(pathEnd);
+          if (lengthVec(subtractVec(projectedEnd, projectedStart)) > tolerance) {
+            graphic.dimensionRange = [projectedStart, projectedEnd];
+          }
+        }
+        graphic.representativeTarget =
+          graphic.circles[0] ??
+          (graphic.segments[0]
+            ? scaleVec(addVec(graphic.segments[0][0], graphic.segments[0][1]), 0.5)
+            : null);
       }
       raw.set(run.id, graphic);
     }
@@ -2372,6 +2417,9 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
         segments: [],
         circles: [],
         lapDimensions: [],
+        mixed: false,
+        dimensionRange: null,
+        representativeTarget: null,
       };
       return {
         run,
@@ -2380,6 +2428,13 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
           project(end),
         ] as [ScreenPoint, ScreenPoint]),
         dots: graphic.circles.map(project),
+        mixed: graphic.mixed,
+        dimensionRange: graphic.dimensionRange
+          ? [project(graphic.dimensionRange[0]), project(graphic.dimensionRange[1])] as [ScreenPoint, ScreenPoint]
+          : null,
+        representativeTarget: graphic.representativeTarget
+          ? project(graphic.representativeTarget)
+          : null,
         lapDimensions: graphic.lapDimensions.map((dimension) => ({
           start: project(dimension.start),
           end: project(dimension.end),
@@ -4102,24 +4157,26 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
           {detailScreenGraphics.map((graphic) => {
             const adjustment = detailRunAdjustments[graphic.run.id] ?? {};
             const label = `${graphic.run.name} @ ${graphic.run.spacingInches}\"`;
-            if (graphic.dots.length >= 2) {
-              let pair: [ScreenPoint, ScreenPoint] = [
+            if (graphic.dimensionRange || graphic.dots.length >= 2) {
+              let pair: [ScreenPoint, ScreenPoint] = graphic.dimensionRange ?? [
                 graphic.dots[0],
                 graphic.dots[1],
               ];
-              let farthest = 0;
-              graphic.dots.forEach((first, firstIndex) =>
-                graphic.dots.slice(firstIndex + 1).forEach((second) => {
-                  const distance = Math.hypot(
-                    second.x - first.x,
-                    second.y - first.y,
-                  );
-                  if (distance > farthest) {
-                    farthest = distance;
-                    pair = [first, second];
-                  }
-                }),
-              );
+              if (!graphic.dimensionRange) {
+                let farthest = 0;
+                graphic.dots.forEach((first, firstIndex) =>
+                  graphic.dots.slice(firstIndex + 1).forEach((second) => {
+                    const distance = Math.hypot(
+                      second.x - first.x,
+                      second.y - first.y,
+                    );
+                    if (distance > farthest) {
+                      farthest = distance;
+                      pair = [first, second];
+                    }
+                  }),
+                );
+              }
               const dx = pair[1].x - pair[0].x;
               const dy = pair[1].y - pair[0].y;
               const magnitude = Math.hypot(dx, dy) || 1;
@@ -4166,6 +4223,15 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
                     markerStart="url(#detail-arrow)"
                     markerEnd="url(#detail-arrow)"
                   />
+                  {graphic.mixed && graphic.representativeTarget && (
+                    <line
+                      className="detail-dimension-witness"
+                      x1={(first.x + second.x) / 2}
+                      y1={(first.y + second.y) / 2}
+                      x2={graphic.representativeTarget.x}
+                      y2={graphic.representativeTarget.y}
+                    />
+                  )}
                   <text
                     x={middle.x}
                     y={middle.y}

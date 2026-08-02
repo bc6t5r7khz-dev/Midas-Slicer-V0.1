@@ -2483,11 +2483,17 @@ export default function ModelViewer() {
     );
     const exportedGraphics = new Map<
       string,
-      { segments: Array<[Vec3, Vec3]>; circles: Vec3[] }
+      {
+        segments: Array<[Vec3, Vec3]>;
+        circles: Vec3[];
+        mixed: boolean;
+        dimensionRange: [Vec3, Vec3] | null;
+        representativeTarget: Vec3 | null;
+      }
     >();
     rebarRuns.forEach((run) => {
       const standard = rebarBendStandard(run.barNumber);
-      const candidates = bentInstancesForRun(run).map((instance) => {
+      const candidates = bentInstancesForRun(run).map((instance, index) => {
         const points = instance.flatMap((line) => line.points);
         const distance = points.reduce(
           (closest, point) => Math.min(
@@ -2497,19 +2503,32 @@ export default function ModelViewer() {
           Number.POSITIVE_INFINITY,
         );
         return {
+          index,
           distance,
           section: sectionRebarGeometry(
             instance,
             activeSectionView.origin,
             activeSectionView.normal,
             activeSectionView.throwDepthModelUnits,
+            axes.up,
           ),
         };
       });
+      const middleIndex = Math.floor(candidates.length / 2);
+      const mixedCandidate = candidates
+        .filter(({ section }) => section.mixed)
+        .sort(
+          (a, b) =>
+            Math.abs(a.index - middleIndex) - Math.abs(b.index - middleIndex),
+        )[0];
       const lineCandidate = candidates
         .filter(({ section }) => section.projectedLines.length)
         .sort((a, b) => a.distance - b.distance)[0];
-      const visible = lineCandidate ? [lineCandidate] : candidates;
+      const visible = mixedCandidate
+        ? [mixedCandidate]
+        : lineCandidate
+          ? [lineCandidate]
+          : candidates;
       const segments: Array<[Vec3, Vec3]> = [];
       const circles: Vec3[] = [];
       visible.forEach(({ section }) => {
@@ -2531,7 +2550,42 @@ export default function ModelViewer() {
           );
         });
       });
-      exportedGraphics.set(run.id, { segments, circles });
+      const projectToSection = (point: Vec3) =>
+        addScaled(
+          point,
+          activeSectionView.normal,
+          -dot(subtract(point, activeSectionView.origin), activeSectionView.normal),
+        );
+      const pathStart = run.pathPoints?.[0] ?? run.pathStart ?? null;
+      const pathEnd = run.pathPoints?.at(-1) ?? run.pathEnd ?? null;
+      const projectedPathStart = pathStart ? projectToSection(pathStart) : null;
+      const projectedPathEnd = pathEnd ? projectToSection(pathEnd) : null;
+      const dimensionRange =
+        mixedCandidate &&
+        projectedPathStart &&
+        projectedPathEnd &&
+        Math.hypot(
+          projectedPathEnd.x - projectedPathStart.x,
+          projectedPathEnd.y - projectedPathStart.y,
+          projectedPathEnd.z - projectedPathStart.z,
+        ) > tolerance
+          ? [projectedPathStart, projectedPathEnd] as [Vec3, Vec3]
+          : null;
+      exportedGraphics.set(run.id, {
+        segments,
+        circles,
+        mixed: Boolean(mixedCandidate),
+        dimensionRange,
+        representativeTarget:
+          circles[0] ??
+          (segments[0]
+            ? {
+                x: (segments[0][0].x + segments[0][1].x) / 2,
+                y: (segments[0][0].y + segments[0][1].y) / 2,
+                z: (segments[0][0].z + segments[0][1].z) / 2,
+              }
+            : null),
+      });
     });
     const detail = activeSlicePin.detail;
     const objectToSection = (point: Vec3) =>
@@ -2539,18 +2593,23 @@ export default function ModelViewer() {
     rebarRuns.forEach((run) => {
       const graphic = exportedGraphics.get(run.id);
       const adjustment = detail?.runAdjustments[run.id] ?? {};
-      if (graphic && graphic.circles.length >= 2) {
-        let pair: [Vec3, Vec3] = [graphic.circles[0], graphic.circles[1]];
-        let farthest = 0;
-        graphic.circles.forEach((first, firstIndex) =>
-          graphic.circles.slice(firstIndex + 1).forEach((second) => {
-            const distance = Math.hypot(second.x-first.x, second.y-first.y, second.z-first.z);
-            if (distance > farthest) {
-              farthest = distance;
-              pair = [first, second];
-            }
-          }),
-        );
+      if (graphic && (graphic.dimensionRange || graphic.circles.length >= 2)) {
+        let pair: [Vec3, Vec3] = graphic.dimensionRange ?? [
+          graphic.circles[0],
+          graphic.circles[1],
+        ];
+        if (!graphic.dimensionRange) {
+          let farthest = 0;
+          graphic.circles.forEach((first, firstIndex) =>
+            graphic.circles.slice(firstIndex + 1).forEach((second) => {
+              const distance = Math.hypot(second.x-first.x, second.y-first.y, second.z-first.z);
+              if (distance > farthest) {
+                farthest = distance;
+                pair = [first, second];
+              }
+            }),
+          );
+        }
         const first = toSection(pair[0]);
         const second = toSection(pair[1]);
         const dx = second.x - first.x;
@@ -2578,6 +2637,19 @@ export default function ModelViewer() {
             })(),
           ),
         );
+        if (graphic.mixed && graphic.representativeTarget) {
+          entities.push(
+            dxfLine(
+              {
+                x: (dimensionStart.x + dimensionEnd.x) / 2,
+                y: (dimensionStart.y + dimensionEnd.y) / 2,
+                z: 0,
+              },
+              toSection(graphic.representativeTarget),
+              "ANNOTATIONS",
+            ),
+          );
+        }
         return;
       }
       if (!graphic?.segments.length) return;

@@ -27,7 +27,7 @@ test("server-renders the QuickBar3D application", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>QuickBar3D v65<\/title>/i);
+  assert.match(html, /<title>QuickBar3D v66<\/title>/i);
   assert.match(html, />Setup</);
   assert.match(html, />Import</);
   assert.match(html, /Define Floor Plane/);

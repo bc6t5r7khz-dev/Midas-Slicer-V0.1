@@ -88,3 +88,60 @@ test("projects in-depth bars and hides bars beyond the throw depth", () => {
   assert.equal(result.projectedLines[0].start.z, 0);
   assert.equal(result.projectedLines[0].end.z, 0);
 });
+
+test("projects a complete mixed elevation bar with dots at depth transitions", () => {
+  const result = sectionRebarGeometry(
+    [
+      {
+        id: "mixed-elevation",
+        points: [
+          { x: 0, y: 10, z: -5 },
+          { x: 0, y: 10, z: 5 },
+          { x: 0, y: 0, z: 5 },
+          { x: 0, y: -10, z: 20 },
+        ],
+      },
+    ],
+    origin,
+    normal,
+    2,
+  );
+
+  assert.equal(result.mixed, true);
+  assert.equal(result.circles.length, 2);
+  assert.equal(result.projectedLines.length, 2);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.circles.map(({ center }) => center))),
+    [
+      { x: 0, y: 10, z: 0 },
+      { x: 0, y: 0, z: 0 },
+    ],
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.projectedLines[1].end)),
+    { x: 0, y: -10, z: 0 },
+  );
+});
+
+test("suppresses a depth leg whose visible slant is within ten degrees of horizontal", () => {
+  const result = sectionRebarGeometry(
+    [
+      {
+        id: "nearly-horizontal-depth-leg",
+        points: [
+          { x: 0, y: 10, z: -5 },
+          { x: 0, y: 10, z: 5 },
+          { x: 0, y: 0, z: 5 },
+          { x: 10, y: -1, z: 20 },
+        ],
+      },
+    ],
+    origin,
+    normal,
+    2,
+  );
+
+  assert.equal(result.mixed, true);
+  assert.equal(result.circles.length, 2);
+  assert.equal(result.projectedLines.length, 1);
+});
