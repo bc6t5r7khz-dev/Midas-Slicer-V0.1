@@ -27,6 +27,7 @@ const {
   dxfLine,
   dxfPolyline,
   dxfRebarSolids,
+  dxfText,
 } =
   module.exports;
 
@@ -34,10 +35,12 @@ test("creates an AutoCAD R12 DXF with section entities", () => {
   const dxf = createDxf([
     dxfLine({ x: 0, y: 0, z: 0 }, { x: 12, y: 0, z: 0 }, "CONCRETE SECTION"),
     dxfCircle({ x: 6, y: 4, z: 0 }, 0.3125, "REBAR #5"),
+    dxfText({ x: 2, y: 3, z: 0 }, "#5101E @ 12\"", 1.25, "ANNOTATIONS"),
   ]);
   assert.match(dxf, /\$ACADVER\n1\nAC1009/);
   assert.match(dxf, /0\nLINE\n8\nCONCRETE_SECTION/);
   assert.match(dxf, /0\nCIRCLE\n8\nREBAR__5/);
+  assert.match(dxf, /0\nTEXT\n8\nANNOTATIONS/);
   assert.match(dxf, /0\nEOF/);
 });
 

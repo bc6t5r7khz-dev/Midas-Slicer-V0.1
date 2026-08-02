@@ -2361,6 +2361,41 @@ body {
   gap: 8px;
 }
 
+.rebar-edit-navigator {
+  border: 1px solid #111;
+  background: #fff;
+}
+
+.rebar-edit-navigator-header {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.45rem;
+  border-bottom: 1px solid #111;
+}
+
+.rebar-edit-navigator-header .button {
+  min-height: 1.75rem;
+  padding: 0.2rem 0.65rem;
+}
+
+.rebar-edit-navigator > button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.55rem;
+  border: 0;
+  border-bottom: 1px solid #ccc;
+  background: #fff;
+  padding: 0.48rem 0.6rem;
+  text-align: left;
+}
+
+.rebar-edit-navigator > button:hover,
+.rebar-edit-navigator > button.active {
+  background: #edf4f7;
+}
+
 .parameter-menu > label {
   display: grid;
   gap: 5px;
@@ -3213,6 +3248,26 @@ input[type="range"]::-moz-range-thumb {
 .slice-slider-row > input[type="range"] {
   width: 100%;
   accent-color: #111;
+}
+
+.slice-slider-row > input[type="range"]::-webkit-slider-runnable-track {
+  height: 2px;
+  border: 0;
+  background: #111;
+}
+
+.slice-slider-row > input[type="range"]::-moz-range-track {
+  height: 2px;
+  border: 0;
+  background: #111;
+}
+
+.brand-version {
+  margin-left: 0.45rem;
+  color: #666;
+  font-size: 0.68em;
+  font-weight: 500;
+  letter-spacing: 0.08em;
 }
 
 .slice-compact-input {

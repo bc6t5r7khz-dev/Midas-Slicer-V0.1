@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import "./globals.css";
+import { APP_NAME, APP_VERSION } from "./lib/appVersion";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -12,7 +13,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     metadataBase: new URL(origin),
-    title: "MCT Section Lab",
+    title: `${APP_NAME} ${APP_VERSION}`,
     description:
       "Inspect MIDAS Civil MCT node clouds in a custom local coordinate system.",
     icons: {
@@ -20,13 +21,13 @@ export async function generateMetadata(): Promise<Metadata> {
       shortcut: "/favicon.svg",
     },
     openGraph: {
-      title: "MCT Section Lab",
+      title: `${APP_NAME} ${APP_VERSION}`,
       description: "Local node cloud inspection for MIDAS Civil models.",
       images: [{ url: `${origin}/og.png`, width: 1733, height: 909 }],
     },
     twitter: {
       card: "summary_large_image",
-      title: "MCT Section Lab",
+      title: `${APP_NAME} ${APP_VERSION}`,
       description: "Local node cloud inspection for MIDAS Civil models.",
       images: [`${origin}/og.png`],
     },

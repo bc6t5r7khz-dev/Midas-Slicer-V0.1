@@ -1,6 +1,7 @@
 "use client";
 
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { APP_NAME, APP_VERSION } from "../lib/appVersion";
 
 type Props = { children: ReactNode };
 type State = { error: Error | null };
@@ -13,7 +14,7 @@ export default class AppErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("MCT Section Lab client error", error, info);
+    console.error(`${APP_NAME} client error`, error, info);
   }
 
   render() {
@@ -21,7 +22,7 @@ export default class AppErrorBoundary extends Component<Props, State> {
       return (
         <main className="fatal-fallback" role="alert">
           <div>
-            <span className="eyebrow">MCT SECTION LAB</span>
+            <span className="eyebrow">{APP_NAME.toUpperCase()} {APP_VERSION}</span>
             <h1>The viewer could not start</h1>
             <p>{this.state.error.message}</p>
             <button

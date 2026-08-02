@@ -41,6 +41,23 @@ export function dxfCircle(center: Vec3, radius: number, layer: string) {
   );
 }
 
+export function dxfText(
+  position: Vec3,
+  value: string,
+  height: number,
+  layer: string,
+  rotation = 0,
+) {
+  return (
+    pair(0, "TEXT") +
+    pair(8, layerName(layer)) +
+    pointPairs(position) +
+    pair(40, height) +
+    pair(1, value.replace(/[\r\n]+/g, " ")) +
+    pair(50, rotation)
+  );
+}
+
 export function dxfPolyline(
   points: Vec3[],
   layer: string,

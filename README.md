@@ -1,4 +1,4 @@
-# MCT Section Lab
+# QuickBar3D v64
 
 A local-first Three.js application for inspecting MIDAS Civil MCT models,
 defining local coordinates and volumes, slicing solid geometry, and laying out

@@ -123,6 +123,9 @@ export type DetailRunAdjustment = {
   target?: { segmentIndex: number; fraction: number };
   dimensionOffset?: number;
   lapDimensionOffset?: number;
+  /** Model-coordinate text and elbow positions keep annotations attached to the section. */
+  objectLabel?: Vec3;
+  objectLeader?: Vec3;
 };
 
 export type DetailNote = {
@@ -134,6 +137,9 @@ export type DetailNote = {
   target: { x: number; y: number };
   /** Stable model-coordinate arrow location used by newly placed notes. */
   objectTarget?: Vec3;
+  /** Stable model-coordinate label and leader-elbow locations. */
+  objectLabel?: Vec3;
+  objectLeader?: Vec3;
 };
 
 export type SlicePin = {

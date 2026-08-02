@@ -22,12 +22,12 @@ async function render() {
   );
 }
 
-test("server-renders the MCT Section Lab application", async () => {
+test("server-renders the QuickBar3D application", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>MCT Section Lab<\/title>/i);
+  assert.match(html, /<title>QuickBar3D v64<\/title>/i);
   assert.match(html, />Setup</);
   assert.match(html, />Import</);
   assert.match(html, /Define Floor Plane/);

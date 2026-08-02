@@ -193,3 +193,27 @@ test("creates a formula-driven multi-sheet hand-calculation workbook", () => {
   assert.match(strFromU8(files["xl/workbook.xml"]), /name="Bar Schedule"/);
   assert.match(strFromU8(files["xl/worksheets/sheet2.xml"]), /<f>C4\*D4<\/f>/);
 });
+
+test("sorts marks by series number without treating bar size as the primary key", () => {
+  const marks = ["#7201E", "#4104E", "#6103E", "#5102E", "#5101E"];
+  const inputs = marks.map((name, index) => {
+    const barNumber = name[1];
+    const run = {
+      id: `run-${index}`,
+      name,
+      barNumber,
+      suffix: "E",
+      lines: line([{ x: 0, y: 0, z: 0 }, { x: 12, y: 0, z: 0 }]),
+      positions: [0],
+      axis: "x",
+      start: 0,
+      end: 0,
+      spacingInches: 12,
+    };
+    return { run, sharpInstances: [run.lines], bentInstances: [run.lines] };
+  });
+  assert.deepEqual(
+    Array.from(createRebarScheduleRows(inputs, 1), (row) => row.mark),
+    ["#5101E", "#5102E", "#6103E", "#4104E", "#7201E"],
+  );
+});

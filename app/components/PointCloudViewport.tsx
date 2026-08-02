@@ -143,6 +143,7 @@ type Props = {
     throwDepthModelUnits: number;
   } | null;
   detailMode: boolean;
+  lockOrbit: boolean;
   detailRunAdjustments: Record<string, DetailRunAdjustment>;
   detailNotes: DetailNote[];
   pendingDetailNoteText: string | null;
@@ -746,6 +747,7 @@ export default function PointCloudViewport({
   rebarPlanePreviews,
   rebarSectionView,
   detailMode,
+  lockOrbit,
   detailRunAdjustments,
   detailNotes,
   pendingDetailNoteText,
@@ -800,6 +802,7 @@ export default function PointCloudViewport({
   const onInsertFaceVertexRef = useRef(onInsertFaceVertex);
   const elementEditModeRef = useRef(elementEditMode);
   const detailModeRef = useRef(detailMode);
+  const lockOrbitRef = useRef(lockOrbit);
   const onPickElementRef = useRef(onPickElement);
   const rebarDrawingRef = useRef(rebarDrawing);
   const onPickRebarPointRef = useRef(onPickRebarPoint);
@@ -856,6 +859,7 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
   onInsertFaceVertexRef.current = onInsertFaceVertex;
   elementEditModeRef.current = elementEditMode;
   detailModeRef.current = detailMode;
+  lockOrbitRef.current = lockOrbit;
   onPickElementRef.current = onPickElement;
   rebarDrawingRef.current = rebarDrawing;
   onPickRebarPointRef.current = onPickRebarPoint;
@@ -1344,6 +1348,43 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
         if (snapped) return { point: snapped, snapped: true };
         const guidePoint = closestGuidePoint(event);
         if (guidePoint) {
+          const previous =
+            pendingRebarLineRef.current?.points[
+              (pendingRebarLineRef.current?.points.length ?? 0) - 1
+            ];
+          if (event.shiftKey && previous && inchesPerModelUnitRef.current) {
+            const start = new THREE.Vector3(
+              guidePoint.segment[0].x,
+              guidePoint.segment[0].y,
+              guidePoint.segment[0].z,
+            );
+            const end = new THREE.Vector3(
+              guidePoint.segment[1].x,
+              guidePoint.segment[1].y,
+              guidePoint.segment[1].z,
+            );
+            const direction = end.sub(start).normalize();
+            const candidate = new THREE.Vector3(
+              guidePoint.point.x - previous.x,
+              guidePoint.point.y - previous.y,
+              guidePoint.point.z - previous.z,
+            );
+            if (candidate.dot(direction) < 0) direction.multiplyScalar(-1);
+            const wholeInches = Math.max(
+              1,
+              Math.round(candidate.length() * inchesPerModelUnitRef.current),
+            );
+            return {
+              point: {
+                x: previous.x + direction.x * wholeInches / inchesPerModelUnitRef.current,
+                y: previous.y + direction.y * wholeInches / inchesPerModelUnitRef.current,
+                z: previous.z + direction.z * wholeInches / inchesPerModelUnitRef.current,
+              },
+              snapped: false,
+              segment: guidePoint.segment,
+              wholeInchSnap: true,
+            };
+          }
           return {
             point: guidePoint.point,
             snapped: false,
@@ -1558,7 +1599,7 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
           onHoverFaceRef.current(null);
           return;
         }
-        if (orbitDrag && !edgeDrag && !detailModeRef.current) {
+        if (orbitDrag && !edgeDrag && !detailModeRef.current && !lockOrbitRef.current) {
           rotateNaturally(
             event.clientX - orbitDrag.x,
             event.clientY - orbitDrag.y,
@@ -3682,16 +3723,15 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
     return reframePoint(currentPoint, basis, null);
   };
 
-  const projectDetailNoteTarget = (
-    note: DetailNote,
+  const projectDetailObjectPoint = (
+    objectPoint: Vec3 | undefined,
+    fallback: ScreenPoint,
     width: number,
     height: number,
   ): ScreenPoint => {
     const state = sceneRef.current;
-    if (!state || !note.objectTarget) {
-      return { x: note.target.x * width, y: note.target.y * height };
-    }
-    const currentPoint = reframePoint(note.objectTarget, null, basis);
+    if (!state || !objectPoint) return fallback;
+    const currentPoint = reframePoint(objectPoint, null, basis);
     const projected = toThree(currentPoint, displayOffset).project(state.camera);
     return {
       x: (projected.x * 0.5 + 0.5) * width,
@@ -3699,11 +3739,24 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
     };
   };
 
+  const projectDetailNoteTarget = (
+    note: DetailNote,
+    width: number,
+    height: number,
+  ) => projectDetailObjectPoint(
+    note.objectTarget,
+    { x: note.target.x * width, y: note.target.y * height },
+    width,
+    height,
+  );
+
   useEffect(() => {
     if (
       !detailMode ||
       !rebarSectionView ||
-      !detailNotes.some((note) => !note.objectTarget)
+      !detailNotes.some(
+        (note) => !note.objectTarget || !note.objectLabel || !note.objectLeader,
+      )
     ) {
       return;
     }
@@ -3711,18 +3764,21 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
     if (!host?.clientWidth || !host.clientHeight) return;
     let changed = false;
     const migrated = detailNotes.map((note) => {
-      if (note.objectTarget) return note;
-      const objectTarget = detailPointAtScreen(
-        {
-          x: note.target.x * host.clientWidth,
-          y: note.target.y * host.clientHeight,
-        },
-        host.clientWidth,
-        host.clientHeight,
+      const objectTarget = note.objectTarget ?? detailPointAtScreen(
+        { x: note.target.x * host.clientWidth, y: note.target.y * host.clientHeight },
+        host.clientWidth, host.clientHeight,
       );
-      if (!objectTarget) return note;
+      const objectLabel = note.objectLabel ?? detailPointAtScreen(
+        { x: note.label.x * host.clientWidth, y: note.label.y * host.clientHeight },
+        host.clientWidth, host.clientHeight,
+      );
+      const objectLeader = note.objectLeader ?? detailPointAtScreen(
+        { x: note.leader.x * host.clientWidth, y: note.leader.y * host.clientHeight },
+        host.clientWidth, host.clientHeight,
+      );
+      if (!objectTarget || !objectLabel || !objectLeader) return note;
       changed = true;
-      return { ...note, objectTarget };
+      return { ...note, objectTarget, objectLabel, objectLeader };
     });
     if (changed) onDetailNotesChange(migrated);
   }, [
@@ -3732,6 +3788,57 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
     detailProjectionRevision,
     displayOffset,
     onDetailNotesChange,
+    rebarSectionView,
+  ]);
+
+  useEffect(() => {
+    if (!detailMode || !rebarSectionView) return;
+    const host = hostRef.current;
+    if (!host?.clientWidth || !host.clientHeight) return;
+    for (const graphic of detailScreenGraphics) {
+      if (!graphic.segments.length || graphic.dots.length >= 2) continue;
+      const adjustment = detailRunAdjustments[graphic.run.id] ?? {};
+      if (adjustment.objectLabel && adjustment.objectLeader) continue;
+      const longest = graphic.segments.reduce(
+        (best, segment, index) => {
+          const distance = Math.hypot(
+            segment[1].x - segment[0].x,
+            segment[1].y - segment[0].y,
+          );
+          return distance > best.distance ? { index, distance } : best;
+        },
+        { index: 0, distance: 0 },
+      );
+      const targetDefinition = adjustment.target ?? {
+        segmentIndex: longest.index,
+        fraction: 0.5,
+      };
+      const segment = graphic.segments[targetDefinition.segmentIndex] ?? graphic.segments[longest.index];
+      if (!segment) continue;
+      const target = {
+        x: segment[0].x + (segment[1].x - segment[0].x) * targetDefinition.fraction,
+        y: segment[0].y + (segment[1].y - segment[0].y) * targetDefinition.fraction,
+      };
+      const label = {
+        x: target.x + (adjustment.labelOffset?.x ?? 54),
+        y: target.y + (adjustment.labelOffset?.y ?? -22),
+      };
+      const direction = label.x >= target.x ? 1 : -1;
+      const leader = { x: label.x - direction * 32, y: label.y };
+      const objectLabel = adjustment.objectLabel ?? detailPointAtScreen(label, host.clientWidth, host.clientHeight);
+      const objectLeader = adjustment.objectLeader ?? detailPointAtScreen(leader, host.clientWidth, host.clientHeight);
+      if (objectLabel && objectLeader) {
+        onDetailRunAdjustment(graphic.run.id, { ...adjustment, objectLabel, objectLeader });
+      }
+    }
+  }, [
+    basis,
+    detailMode,
+    detailProjectionRevision,
+    detailRunAdjustments,
+    detailScreenGraphics,
+    displayOffset,
+    onDetailRunAdjustment,
     rebarSectionView,
   ]);
 
@@ -3762,16 +3869,13 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
     }
     const dx = event.clientX - detailDrag.start.x;
     const dy = event.clientY - detailDrag.start.y;
-    if (
-      detailDrag.kind === "run-label" ||
-      detailDrag.kind === "run-leader"
-    ) {
+    if (detailDrag.kind === "run-label" || detailDrag.kind === "run-leader") {
       const initial = detailDrag.initial;
-      const next = { ...initial };
-      next.labelOffset = {
-        x: (initial.labelOffset?.x ?? 54) + dx,
-        y: (initial.labelOffset?.y ?? -22) + dy,
-      };
+      const objectPoint = detailPointAtScreen(point, rect.width, rect.height);
+      if (!objectPoint) return;
+      const next = detailDrag.kind === "run-label"
+        ? { ...initial, objectLabel: objectPoint }
+        : { ...initial, objectLeader: objectPoint };
       onDetailRunAdjustment(detailDrag.id, next);
       return;
     }
@@ -3791,7 +3895,7 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
       });
       return;
     }
-    const initial = detailDrag.initial;
+    const initial = detailDrag.initial as DetailNote;
     if (detailDrag.kind === "note-target") {
       const objectTarget = detailPointAtScreen(point, rect.width, rect.height);
       updateDetailNote(detailDrag.id, {
@@ -3800,24 +3904,24 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
         ...(objectTarget ? { objectTarget } : {}),
       });
     } else if (detailDrag.kind === "note-label") {
+      const objectLabel = detailPointAtScreen(point, rect.width, rect.height);
       updateDetailNote(detailDrag.id, {
         ...initial,
         label: {
           x: (initial.label.x * rect.width + dx) / rect.width,
           y: (initial.label.y * rect.height + dy) / rect.height,
         },
+        ...(objectLabel ? { objectLabel } : {}),
       });
     } else {
+      const objectLeader = detailPointAtScreen(point, rect.width, rect.height);
       updateDetailNote(detailDrag.id, {
         ...initial,
         leader: {
           x: (initial.leader.x * rect.width + dx) / rect.width,
           y: (initial.leader.y * rect.height + dy) / rect.height,
         },
-        label: {
-          x: (initial.label.x * rect.width + dx) / rect.width,
-          y: (initial.label.y * rect.height + dy) / rect.height,
-        },
+        ...(objectLeader ? { objectLeader } : {}),
       });
     }
   };
@@ -3875,17 +3979,23 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
               rect.height,
             );
             if (!objectTarget) return;
+            const leaderPoint = { x: target.x + 46, y: target.y - 38 };
+            const labelPoint = { x: target.x + 104, y: target.y - 38 };
+            const objectLeader = detailPointAtScreen(leaderPoint, rect.width, rect.height);
+            const objectLabel = detailPointAtScreen(labelPoint, rect.width, rect.height);
             onPlaceDetailNote({
               id: `detail-note-${crypto.randomUUID()}`,
               text: pendingDetailNoteText,
               target: { x: target.x / rect.width, y: target.y / rect.height },
               objectTarget,
+              ...(objectLeader ? { objectLeader } : {}),
+              ...(objectLabel ? { objectLabel } : {}),
               leader: {
-                x: Math.min(0.98, (target.x + 46) / rect.width),
+                x: Math.min(0.98, leaderPoint.x / rect.width),
                 y: Math.max(0.02, (target.y - 38) / rect.height),
               },
               label: {
-                x: Math.min(0.98, (target.x + 104) / rect.width),
+                x: Math.min(0.98, labelPoint.x / rect.width),
                 y: Math.max(0.02, (target.y - 38) / rect.height),
               },
             });
@@ -4008,23 +4118,34 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
                 (targetSegment[1].y - targetSegment[0].y) *
                   targetDefinition.fraction,
             };
-            const textPoint = {
-              x: target.x + (adjustment.labelOffset?.x ?? 54),
-              y: target.y + (adjustment.labelOffset?.y ?? -22),
-            };
+            const host = hostRef.current;
+            const width = Math.max(host?.clientWidth ?? 1, 1);
+            const height = Math.max(host?.clientHeight ?? 1, 1);
+            const textPoint = projectDetailObjectPoint(
+              adjustment.objectLabel,
+              {
+                x: target.x + (adjustment.labelOffset?.x ?? 54),
+                y: target.y + (adjustment.labelOffset?.y ?? -22),
+              },
+              width,
+              height,
+            );
             const textDirection = textPoint.x >= target.x ? 1 : -1;
             const textAnchor = textDirection > 0 ? "start" : "end";
             const landingEnd = {
               x: textPoint.x - textDirection * 6,
               y: textPoint.y,
             };
-            const leader = {
-              x:
-                landingEnd.x -
-                textDirection *
-                  Math.max(24, Math.abs(adjustment.leaderOffset?.x ?? 26)),
-              y: textPoint.y,
-            };
+            const projectedLeader = projectDetailObjectPoint(
+              adjustment.objectLeader,
+              {
+                x: landingEnd.x - textDirection * Math.max(24, Math.abs(adjustment.leaderOffset?.x ?? 26)),
+                y: textPoint.y,
+              },
+              width,
+              height,
+            );
+            const leader = { x: projectedLeader.x, y: textPoint.y };
             return (
               <g key={graphic.run.id} className="detail-leader">
                 <polyline
@@ -4136,17 +4257,25 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
             const width = Math.max(host?.clientWidth ?? 1, 1);
             const height = Math.max(host?.clientHeight ?? 1, 1);
             const target = projectDetailNoteTarget(note, width, height);
-            const label = { x: note.label.x * width, y: note.label.y * height };
+            const label = projectDetailObjectPoint(
+              note.objectLabel,
+              { x: note.label.x * width, y: note.label.y * height },
+              width,
+              height,
+            );
             const textDirection = label.x >= target.x ? 1 : -1;
             const textAnchor = textDirection > 0 ? "start" : "end";
             const landingEnd = {
               x: label.x - textDirection * 6,
               y: label.y,
             };
-            const leader = {
-              x: note.leader.x * width,
-              y: label.y,
-            };
+            const projectedLeader = projectDetailObjectPoint(
+              note.objectLeader,
+              { x: note.leader.x * width, y: note.leader.y * height },
+              width,
+              height,
+            );
+            const leader = { x: projectedLeader.x, y: label.y };
             return (
               <g key={note.id} className="detail-leader custom-detail-note">
                 <polyline

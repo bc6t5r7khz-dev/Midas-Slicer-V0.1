@@ -419,7 +419,27 @@ export function createRebarScheduleRows(
     });
     rows.push(...groups.values());
   }
-  return rows;
+  return rows.sort((left, right) => {
+    const seriesKey = (row: RebarScheduleRow) => {
+      const escapedSize = row.barNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const withoutSize = row.mark
+        .trim()
+        .replace(new RegExp(`^#?${escapedSize}`), "")
+        .replace(/^[^0-9]*/, "");
+      const match = withoutSize.match(/^(\d+)/);
+      return {
+        number: match ? Number(match[1]) : Number.POSITIVE_INFINITY,
+        suffix: match ? withoutSize.slice(match[1].length) : withoutSize,
+      };
+    };
+    const a = seriesKey(left);
+    const b = seriesKey(right);
+    return (
+      a.number - b.number ||
+      a.suffix.localeCompare(b.suffix, undefined, { numeric: true }) ||
+      left.mark.localeCompare(right.mark, undefined, { numeric: true })
+    );
+  });
 }
 
 const escapeXml = (value: string) =>
@@ -503,7 +523,7 @@ export function buildRebarScheduleWorkbookXml(
   return `<?xml version="1.0"?>
 <?mso-application progid="Excel.Sheet"?>
 <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:x="urn:schemas-microsoft-com:office:excel">
-<DocumentProperties xmlns="urn:schemas-microsoft-com:office:office"><Title>${escapeXml(title)} Reinforcing Bar Schedule</Title><Author>MCT Section Lab</Author></DocumentProperties>
+<DocumentProperties xmlns="urn:schemas-microsoft-com:office:office"><Title>${escapeXml(title)} Reinforcing Bar Schedule</Title><Author>QuickBar3D</Author></DocumentProperties>
 <Styles>
 <Style ss:ID="Default"><Alignment ss:Vertical="Center"/><Font ss:FontName="Arial" ss:Size="9"/></Style>
 <Style ss:ID="Title"><Alignment ss:Horizontal="Left" ss:Vertical="Center"/><Font ss:FontName="Arial" ss:Size="14" ss:Bold="1"/><Interior ss:Color="#FFFFFF" ss:Pattern="Solid"/></Style>
@@ -703,8 +723,8 @@ export function buildRebarScheduleWorkbookXlsx(
   const files: Record<string, Uint8Array> = {
     "[Content_Types].xml": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheetOverrides}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`),
     "_rels/.rels": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`),
-    "docProps/core.xml": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${escapeXml(title)} Reinforcing Bar Schedule</dc:title><dc:creator>MCT Section Lab</dc:creator></cp:coreProperties>`),
-    "docProps/app.xml": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>MCT Section Lab</Application></Properties>`),
+    "docProps/core.xml": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${escapeXml(title)} Reinforcing Bar Schedule</dc:title><dc:creator>QuickBar3D</dc:creator></cp:coreProperties>`),
+    "docProps/app.xml": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>QuickBar3D</Application></Properties>`),
     "xl/workbook.xml": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${workbookSheets}</sheets><calcPr calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"/></workbook>`),
     "xl/_rels/workbook.xml.rels": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${workbookRelationships}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`),
     "xl/styles.xml": strToU8(xlsxStylesXml),

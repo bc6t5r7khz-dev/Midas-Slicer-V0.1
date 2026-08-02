@@ -41,6 +41,7 @@ import {
   dxfFaces,
   dxfLine,
   dxfRebarSolids,
+  dxfText,
 } from "../lib/dxfExport";
 import {
   sectionPlaneAxes,
@@ -84,6 +85,7 @@ import {
   modelTolerance,
 } from "../lib/volumeGeometry";
 import PointCloudViewport from "./PointCloudViewport";
+import { APP_NAME, APP_VERSION } from "../lib/appVersion";
 
 function DraftNumberInput({
   value,
@@ -706,6 +708,7 @@ export default function ModelViewer() {
   const [pendingRebarLine, setPendingRebarLine] =
     useState<RebarLine | null>(null);
   const [rebarSpacing, setRebarSpacing] = useState(12);
+  const [lapSpacingFactor, setLapSpacingFactor] = useState<0.5 | 1 | 2>(1);
   const [lapSnapDistanceInches, setLapSnapDistanceInches] = useState(12);
   const [customSpacingDraft, setCustomSpacingDraft] = useState("");
   const [rebarPathStart, setRebarPathStart] = useState<Vec3 | null>(null);
@@ -2440,30 +2443,138 @@ export default function ModelViewer() {
         ),
       ),
     );
+    const exportedGraphics = new Map<
+      string,
+      { segments: Array<[Vec3, Vec3]>; circles: Vec3[] }
+    >();
     rebarRuns.forEach((run) => {
       const standard = rebarBendStandard(run.barNumber);
-      bentInstancesForRun(run).forEach((instance) => {
-        const section = sectionRebarGeometry(
-          instance,
-          activeSectionView.origin,
-          activeSectionView.normal,
-          activeSectionView.throwDepthModelUnits,
+      const candidates = bentInstancesForRun(run).map((instance) => {
+        const points = instance.flatMap((line) => line.points);
+        const distance = points.reduce(
+          (closest, point) => Math.min(
+            closest,
+            Math.abs(dot(subtract(point, activeSectionView.origin), activeSectionView.normal)),
+          ),
+          Number.POSITIVE_INFINITY,
         );
-        section.projectedLines.forEach(({ start, end }) =>
+        return {
+          distance,
+          section: sectionRebarGeometry(
+            instance,
+            activeSectionView.origin,
+            activeSectionView.normal,
+            activeSectionView.throwDepthModelUnits,
+          ),
+        };
+      });
+      const lineCandidate = candidates
+        .filter(({ section }) => section.projectedLines.length)
+        .sort((a, b) => a.distance - b.distance)[0];
+      const visible = lineCandidate ? [lineCandidate] : candidates;
+      const segments: Array<[Vec3, Vec3]> = [];
+      const circles: Vec3[] = [];
+      visible.forEach(({ section }) => {
+        section.projectedLines.forEach(({ start, end }) => {
+          segments.push([start, end]);
           entities.push(
             dxfLine(toSection(start), toSection(end), `REBAR_${run.name}`),
-          ),
-        );
-        section.circles.forEach(({ center }) =>
+          );
+        });
+        section.circles.forEach(({ center }) => {
+          if (circles.some((item) => Math.hypot(item.x-center.x,item.y-center.y,item.z-center.z) < tolerance * 10)) return;
+          circles.push(center);
           entities.push(
             dxfCircle(
               toSection(center),
               standard.diameterInches / 2,
               `REBAR_${run.name}`,
             ),
+          );
+        });
+      });
+      exportedGraphics.set(run.id, { segments, circles });
+    });
+    const detail = activeSlicePin.detail;
+    const objectToSection = (point: Vec3) =>
+      toSection(reframePoint(point, null, basis));
+    rebarRuns.forEach((run) => {
+      const graphic = exportedGraphics.get(run.id);
+      const adjustment = detail?.runAdjustments[run.id] ?? {};
+      if (graphic && graphic.circles.length >= 2) {
+        let pair: [Vec3, Vec3] = [graphic.circles[0], graphic.circles[1]];
+        let farthest = 0;
+        graphic.circles.forEach((first, firstIndex) =>
+          graphic.circles.slice(firstIndex + 1).forEach((second) => {
+            const distance = Math.hypot(second.x-first.x, second.y-first.y, second.z-first.z);
+            if (distance > farthest) {
+              farthest = distance;
+              pair = [first, second];
+            }
+          }),
+        );
+        const first = toSection(pair[0]);
+        const second = toSection(pair[1]);
+        const dx = second.x - first.x;
+        const dy = second.y - first.y;
+        const magnitude = Math.hypot(dx, dy) || 1;
+        let normal = { x: -dy / magnitude, y: dx / magnitude };
+        if (normal.y < 0) normal = { x: -normal.x, y: -normal.y };
+        const offset = 6 - (adjustment.dimensionOffset ?? 0) / 8;
+        const dimensionStart = { x: first.x + normal.x*offset, y: first.y + normal.y*offset, z: 0 };
+        const dimensionEnd = { x: second.x + normal.x*offset, y: second.y + normal.y*offset, z: 0 };
+        entities.push(
+          dxfLine(first, dimensionStart, "ANNOTATIONS"),
+          dxfLine(second, dimensionEnd, "ANNOTATIONS"),
+          dxfLine(dimensionStart, dimensionEnd, "ANNOTATIONS"),
+          dxfText(
+            { x: (dimensionStart.x+dimensionEnd.x)/2, y: (dimensionStart.y+dimensionEnd.y)/2+1, z: 0 },
+            `${run.name} @ ${run.spacingInches}\"`,
+            1.25,
+            "ANNOTATIONS",
           ),
         );
+        return;
+      }
+      if (!graphic?.segments.length) return;
+      const longest = graphic.segments.reduce(
+        (best, segment, index) => {
+          const length = Math.hypot(segment[1].x-segment[0].x, segment[1].y-segment[0].y, segment[1].z-segment[0].z);
+          return length > best.length ? { index, length } : best;
+        },
+        { index: 0, length: 0 },
+      );
+      const targetDefinition = adjustment.target ?? { segmentIndex: longest.index, fraction: 0.5 };
+      const segment = graphic.segments[targetDefinition.segmentIndex] ?? graphic.segments[longest.index];
+      const target = toSection({
+        x: segment[0].x + (segment[1].x-segment[0].x)*targetDefinition.fraction,
+        y: segment[0].y + (segment[1].y-segment[0].y)*targetDefinition.fraction,
+        z: segment[0].z + (segment[1].z-segment[0].z)*targetDefinition.fraction,
       });
+      const label = adjustment.objectLabel ? objectToSection(adjustment.objectLabel) : { x: target.x + 12, y: target.y + 6, z: 0 };
+      const elbowSource = adjustment.objectLeader ? objectToSection(adjustment.objectLeader) : { x: label.x - 6, y: label.y, z: 0 };
+      const elbow = { x: elbowSource.x, y: label.y, z: 0 };
+      const direction = label.x >= target.x ? 1 : -1;
+      const landing = { x: label.x - direction, y: label.y, z: 0 };
+      entities.push(
+        dxfLine(target, elbow, "ANNOTATIONS"),
+        dxfLine(elbow, landing, "ANNOTATIONS"),
+        dxfText(label, `${run.name} @ ${run.spacingInches}\"`, 1.25, "ANNOTATIONS"),
+      );
+    });
+    detail?.notes.forEach((note) => {
+      if (!note.objectTarget || !note.objectLabel || !note.objectLeader) return;
+      const target = objectToSection(note.objectTarget);
+      const label = objectToSection(note.objectLabel);
+      const elbowSource = objectToSection(note.objectLeader);
+      const elbow = { x: elbowSource.x, y: label.y, z: 0 };
+      const direction = label.x >= target.x ? 1 : -1;
+      const landing = { x: label.x - direction, y: label.y, z: 0 };
+      entities.push(
+        dxfLine(target, elbow, "NOTES"),
+        dxfLine(elbow, landing, "NOTES"),
+        dxfText(label, note.text, 1.25, "NOTES"),
+      );
     });
     downloadBlob(
       new Blob([createDxf(entities)], {
@@ -3558,6 +3669,7 @@ export default function ModelViewer() {
     setRebarStart(source.startOffset ?? source.start);
     setRebarEnd(source.endOffset ?? source.end);
     setRebarSpacing(source.spacingInches);
+    setLapSpacingFactor(1);
     setLapSnapDistanceInches(12);
     setCustomSpacingDraft(
       [12, 9, 6].includes(source.spacingInches)
@@ -3665,7 +3777,24 @@ export default function ModelViewer() {
     setAdvancedAnchorPickingId(null);
     setSelectedRebarRunIds(new Set([run.id]));
     setRebarPhase("start");
-    setStatus(`Editing ${run.name}. Confirm or update each step.`);
+    setStatus(`Editing ${run.name}. Open only the step you need to change.`);
+  };
+
+  const openEditRebarStep = (
+    phase: "start" | "lines" | "end" | "path-review" | "spacing",
+  ) => {
+    const run = editingRebarRunId
+      ? rebarRuns.find((candidate) => candidate.id === editingRebarRunId)
+      : null;
+    if (!run) return;
+    if (phase === "lines") {
+      setPendingRebarLine((current) => current ?? rebarLines[0] ?? run.lines[0] ?? null);
+      setRebarLines([]);
+    } else if (pendingRebarLine?.points.length && pendingRebarLine.points.length >= 2) {
+      setRebarLines([pendingRebarLine]);
+      setPendingRebarLine(null);
+    }
+    setRebarPhase(phase);
   };
 
   const confirmRebarStartSection = () => {
@@ -3805,9 +3934,17 @@ export default function ModelViewer() {
           : pathStart && pathEnd
             ? [pathStart, pathEnd]
             : [];
+    const editingRun = editingRebarRunId
+      ? rebarRuns.find((candidate) => candidate.id === editingRebarRunId)
+      : null;
+    const effectiveLines = rebarLines.length
+      ? rebarLines
+      : pendingRebarLine && pendingRebarLine.points.length >= 2
+        ? [pendingRebarLine]
+        : editingRun?.lines ?? [];
     if (
       !inchesPerModelUnit ||
-      !rebarLines.length ||
+      !effectiveLines.length ||
       !pathStart ||
       !pathEnd
     ) {
@@ -3842,17 +3979,17 @@ export default function ModelViewer() {
       y: pathDelta.y / chordLength,
       z: pathDelta.z / chordLength,
     };
-    const editingRun = editingRebarRunId
-      ? rebarRuns.find((candidate) => candidate.id === editingRebarRunId)
-      : null;
     const referenceRun = rebarReferenceRunId
       ? rebarRuns.find((candidate) => candidate.id === rebarReferenceRunId)
       : null;
     const isLapped =
       rebarWorkflowKind === "lap" || Boolean(editingRun?.lappedFromRunId);
-    const spacing = isLapped
-      ? referenceRun?.spacingInches ?? editingRun?.spacingInches ?? rebarSpacing
-      : rebarSpacing;
+    const spacing =
+      rebarWorkflowKind === "lap"
+        ? (referenceRun?.spacingInches ?? rebarSpacing) * lapSpacingFactor
+        : isLapped
+          ? editingRun?.spacingInches ?? referenceRun?.spacingInches ?? rebarSpacing
+          : rebarSpacing;
     const runPositions = distributeBars(
       0,
       pathLength,
@@ -3878,7 +4015,7 @@ export default function ModelViewer() {
       pathStart,
       pathEnd,
       pathPoints,
-      objectLines: rebarLines.map((line) =>
+      objectLines: effectiveLines.map((line) =>
         reframeRebarLine(line, basis, null),
       ),
       objectPathStart: reframePoint(pathStart, basis, null),
@@ -3895,7 +4032,7 @@ export default function ModelViewer() {
           (referenceRun?.lapOffsetInches ?? 0) + 1
         : undefined,
       positions: runPositions,
-      lines: rebarLines,
+      lines: effectiveLines,
       advanced:
         (rebarSplayEnabled && rebarSplayTargetPlaneId) ||
         (rebarVariableLengthEnabled && rebarEndpointAnchors.length >= 2)
@@ -4085,7 +4222,7 @@ export default function ModelViewer() {
         setPendingRebarLine(null);
         setRebarPhase("start");
       } else if (rebarPhase === "spacing") {
-        setRebarPhase("path-review");
+        setRebarPhase(rebarWorkflowKind === "lap" ? "end" : "path-review");
       } else if (rebarPhase === "path-review") {
         setRebarPathPoints((current) => current.slice(0, -1));
         setRebarPathEnd(
@@ -4168,7 +4305,10 @@ export default function ModelViewer() {
         return;
       }
       const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, select, [contenteditable='true']")) {
+      if (
+        target?.matches("input, textarea, select, [contenteditable='true']") &&
+        !(target instanceof HTMLInputElement && target.type === "range")
+      ) {
         return;
       }
       event.preventDefault();
@@ -4761,7 +4901,7 @@ export default function ModelViewer() {
             <i />
           </span>
           <div>
-            <strong>MCT SECTION LAB</strong>
+            <strong>{APP_NAME}<span className="brand-version">{APP_VERSION}</span></strong>
             <span>VOLUME INSPECTION WORKSPACE</span>
           </div>
         </div>
@@ -6306,6 +6446,39 @@ export default function ModelViewer() {
                   </div>
                 </section>
 
+                {editingRebarRunId && (
+                  <section className="rebar-edit-navigator" data-rebar-selection-control>
+                    <div className="rebar-edit-navigator-header">
+                      <button
+                        type="button"
+                        className="button dark-confirm"
+                        onClick={() => finishRebarRun()}
+                      >
+                        Accept
+                      </button>
+                      <strong>Edit {editingRebarRun?.name ?? "Bar Run"}</strong>
+                    </div>
+                    {([
+                      ["start", "Start Section"],
+                      ["lines", "Bar Shape"],
+                      ["end", "End Section"],
+                      ["path-review", "Spacing Path"],
+                      ["spacing", "Bar Mark, Size & Spacing"],
+                    ] as const).map(([phase, label]) => (
+                      <button
+                        type="button"
+                        key={phase}
+                        className={rebarPhase === phase ? "active" : ""}
+                        onClick={() => openEditRebarStep(phase)}
+                        aria-expanded={rebarPhase === phase}
+                      >
+                        <span aria-hidden="true">{rebarPhase === phase ? "−" : "+"}</span>
+                        {label}
+                      </button>
+                    ))}
+                  </section>
+                )}
+
                 {rebarPhase === "idle" && (
                   <div className="rebar-primary-actions">
                     <button
@@ -6745,54 +6918,6 @@ export default function ModelViewer() {
                       Shift + arrow moves by {rebarCoverOffsetInches}&quot;
                       toward or away from the model.
                     </small>
-                    {activeLappedWorkflow && (
-                      <div className="bar-number-field">
-                        <span className="eyebrow">BAR NUMBER</span>
-                        <div className="bar-number-buttons">
-                          {["5", "6", "7", "8", "9", "10"].map((number) => (
-                            <button
-                              type="button"
-                              key={number}
-                              className={
-                                rebarBarNumber === number ? "active" : ""
-                              }
-                              onClick={() => setRebarBarNumber(number)}
-                            >
-                              #{number}
-                            </button>
-                          ))}
-                        </div>
-                        <label className="custom-bar-number">
-                          <span>Other</span>
-                          <b>#</b>
-                          <input
-                            aria-label="Other bar number"
-                            className={
-                              ["5", "6", "7", "8", "9", "10"].includes(
-                                rebarBarNumber,
-                              )
-                                ? ""
-                                : "custom-active"
-                            }
-                            value={
-                              ["5", "6", "7", "8", "9", "10"].includes(
-                                rebarBarNumber,
-                              )
-                                ? ""
-                                : rebarBarNumber
-                            }
-                            onChange={(event) =>
-                              setRebarBarNumber(
-                                event.target.value.replace(
-                                  /[^0-9A-Za-z.-]/g,
-                                  "",
-                                ),
-                              )
-                            }
-                          />
-                        </label>
-                      </div>
-                    )}
                     <div className="end-section-choice-actions">
                       <button
                         className="button"
@@ -6982,12 +7107,29 @@ export default function ModelViewer() {
                     </div>
                     <div className="compact-setting-field">
                       <span className="eyebrow">BAR SPACING</span>
+                      {rebarWorkflowKind === "lap" ? (
+                        <div className="compact-choice-row spacing-choice-row lap-spacing-options">
+                          {([
+                            [0.5, "Half"],
+                            [1, "Same"],
+                            [2, "Double"],
+                          ] as const).map(([factor, label]) => (
+                            <button
+                              type="button"
+                              key={factor}
+                              className={lapSpacingFactor === factor ? "active" : ""}
+                              onClick={() => setLapSpacingFactor(factor)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
                       <div className="compact-choice-row spacing-choice-row">
                         {[12, 9, 6].map((spacing) => (
                           <button
                             type="button"
                             key={spacing}
-                            disabled={activeLappedWorkflow}
                             className={
                               customSpacingDraft === "" &&
                               nearlyEqual(rebarSpacing, spacing)
@@ -7005,7 +7147,6 @@ export default function ModelViewer() {
                         <input
                           aria-label="Other bar spacing in inches"
                           inputMode="decimal"
-                          disabled={activeLappedWorkflow}
                           className={customSpacingDraft ? "active" : ""}
                           value={customSpacingDraft}
                           placeholder="Other"
@@ -7022,8 +7163,11 @@ export default function ModelViewer() {
                           }}
                         />
                       </div>
-                      {activeLappedWorkflow && (
-                        <small>Inherited from the selected lapped bar.</small>
+                      )}
+                      {rebarWorkflowKind === "lap" && (
+                        <small>
+                          {((rebarRuns.find((run) => run.id === rebarReferenceRunId)?.spacingInches ?? rebarSpacing) * lapSpacingFactor).toFixed(3)}&quot; final spacing.
+                        </small>
                       )}
                     </div>
                     <div className="bar-number-field">
@@ -7915,6 +8059,7 @@ export default function ModelViewer() {
           rebarPlanePreviews={displayRebarPlanePreviews}
           rebarSectionView={activeSectionView}
           detailMode={activeTab === "details"}
+          lockOrbit={activeTab === "details" || (activeTab === "slicing" && Boolean(activeSlicePin))}
           detailRunAdjustments={activeDetail.runAdjustments}
           detailNotes={activeDetail.notes}
           pendingDetailNoteText={pendingDetailNoteText}
