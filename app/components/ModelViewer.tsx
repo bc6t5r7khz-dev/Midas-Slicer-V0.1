@@ -620,6 +620,12 @@ export default function ModelViewer() {
     string | null
   >(null);
   const previousActiveTabRef = useRef<WorkflowTab>("setup");
+  const nonDetailDisplayRef = useRef({
+    showConcreteSkin: true,
+    lineAndBar: false,
+    showRebarInSlicing: false,
+  });
+  const [normalizeViewUpRequest, setNormalizeViewUpRequest] = useState(0);
   const [selectedSlicePinId, setSelectedSlicePinId] =
     useState<string | null>(null);
   const [selectedSlicePinIds, setSelectedSlicePinIds] = useState<Set<string>>(
@@ -756,6 +762,22 @@ export default function ModelViewer() {
     const previous = previousActiveTabRef.current;
     if (previous === "details" && activeTab !== "details") {
       setPendingDetailNoteText(null);
+      setShowConcreteSkin(nonDetailDisplayRef.current.showConcreteSkin);
+      setLineAndBar(nonDetailDisplayRef.current.lineAndBar);
+      setShowRebarInSlicing(nonDetailDisplayRef.current.showRebarInSlicing);
+      if (activeTab === "rebar" || activeTab === "setup") {
+        setActiveSlicePinId(null);
+        setSelectedSlicePinId(null);
+        setSelectedSlicePinIds(new Set());
+        setSelectedSlicingPlaneId(null);
+        setSelectedSlicingPlaneIds(new Set());
+        setSlicePreviewActive(false);
+      } else if (activeTab === "slicing" && activeSlicePinId) {
+        setSelectedSlicePinId(activeSlicePinId);
+        setSelectedSlicePinIds(new Set([activeSlicePinId]));
+      }
+    }
+    if (previous === "slicing" && activeTab === "rebar") {
       setActiveSlicePinId(null);
       setSelectedSlicePinId(null);
       setSelectedSlicePinIds(new Set());
@@ -763,8 +785,24 @@ export default function ModelViewer() {
       setSelectedSlicingPlaneIds(new Set());
       setSlicePreviewActive(false);
     }
+    if (activeTab !== "details" && previous !== "details") {
+      nonDetailDisplayRef.current = {
+        showConcreteSkin,
+        lineAndBar,
+        showRebarInSlicing,
+      };
+    }
+    if (activeTab === "rebar" && previous !== "rebar") {
+      setNormalizeViewUpRequest((current) => current + 1);
+    }
     previousActiveTabRef.current = activeTab;
-  }, [activeTab]);
+  }, [
+    activeSlicePinId,
+    activeTab,
+    lineAndBar,
+    showConcreteSkin,
+    showRebarInSlicing,
+  ]);
 
   const tolerance = globalBounds ? modelTolerance(globalBounds) : 1e-6;
   const elementSkin = useMemo(
@@ -2532,6 +2570,12 @@ export default function ModelViewer() {
             `${run.name} @ ${run.spacingInches}\"`,
             1.25,
             "ANNOTATIONS",
+            (() => {
+              let angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+              if (angle > 90) angle -= 180;
+              if (angle < -90) angle += 180;
+              return angle;
+            })(),
           ),
         );
         return;
@@ -2552,10 +2596,9 @@ export default function ModelViewer() {
         z: segment[0].z + (segment[1].z-segment[0].z)*targetDefinition.fraction,
       });
       const label = adjustment.objectLabel ? objectToSection(adjustment.objectLabel) : { x: target.x + 12, y: target.y + 6, z: 0 };
-      const elbowSource = adjustment.objectLeader ? objectToSection(adjustment.objectLeader) : { x: label.x - 6, y: label.y, z: 0 };
-      const elbow = { x: elbowSource.x, y: label.y, z: 0 };
       const direction = label.x >= target.x ? 1 : -1;
       const landing = { x: label.x - direction, y: label.y, z: 0 };
+      const elbow = { x: landing.x - direction * 4, y: label.y, z: 0 };
       entities.push(
         dxfLine(target, elbow, "ANNOTATIONS"),
         dxfLine(elbow, landing, "ANNOTATIONS"),
@@ -2563,13 +2606,12 @@ export default function ModelViewer() {
       );
     });
     detail?.notes.forEach((note) => {
-      if (!note.objectTarget || !note.objectLabel || !note.objectLeader) return;
+      if (!note.objectTarget || !note.objectLabel) return;
       const target = objectToSection(note.objectTarget);
       const label = objectToSection(note.objectLabel);
-      const elbowSource = objectToSection(note.objectLeader);
-      const elbow = { x: elbowSource.x, y: label.y, z: 0 };
       const direction = label.x >= target.x ? 1 : -1;
       const landing = { x: label.x - direction, y: label.y, z: 0 };
+      const elbow = { x: landing.x - direction * 4, y: label.y, z: 0 };
       entities.push(
         dxfLine(target, elbow, "NOTES"),
         dxfLine(elbow, landing, "NOTES"),
@@ -3425,7 +3467,7 @@ export default function ModelViewer() {
   const selectSlicePin = (pin: SlicePin, additive: boolean) => {
     setSelectedRebarRunIds(new Set());
     if (!additive) {
-      activateSlicePin(pin);
+      activateSlicePin(pin, Boolean(pin.viewpoint));
       return;
     }
     setSelectedSlicePinIds((current) => {
@@ -4842,7 +4884,8 @@ export default function ModelViewer() {
           activeTab === "slicing" &&
           !target.closest(".viewport") &&
           !target.closest("[data-plane-selection-control]") &&
-          !target.closest(".plane-slice-control")
+          !target.closest(".plane-slice-control") &&
+          !target.closest(".header-menu")
         ) {
           setSelectedSlicingPlaneId(null);
           setSelectedSlicingPlaneIds(new Set());
@@ -4852,7 +4895,8 @@ export default function ModelViewer() {
           activeTab === "slicing" &&
           selectedSlicePinIds.size &&
           !target.closest(".viewport") &&
-          !target.closest("[data-slice-selection-control]")
+          !target.closest("[data-slice-selection-control]") &&
+          !target.closest(".header-menu")
         ) {
           setSelectedSlicePinId(null);
           setSelectedSlicePinIds(new Set());
@@ -5224,6 +5268,13 @@ export default function ModelViewer() {
               className={activeTab === tab.id ? "active" : ""}
               disabled={tab.id !== "setup" && !setupComplete}
               onClick={() => {
+                if (tab.id === "details" && activeTab !== "details") {
+                  nonDetailDisplayRef.current = {
+                    showConcreteSkin,
+                    lineAndBar,
+                    showRebarInSlicing,
+                  };
+                }
                 if (
                   activeTab === "rebar" &&
                   tab.id !== "rebar" &&
@@ -7842,8 +7893,8 @@ export default function ModelViewer() {
                 <section className="details-card">
                   <strong>{activeSlicePin.name}</strong>
                   <p>
-                    Drag labels, leader landings, arrow points, and dimensions
-                    in the drawing. Yellow handles identify editable points.
+                    Drag a label by its text or landing. Arrow points remain
+                    attached to the model; dimensions can also be repositioned.
                   </p>
                 </section>
                 <section className="details-card">
@@ -7896,11 +7947,13 @@ export default function ModelViewer() {
                 <button
                   className="button danger-outline"
                   onClick={() => {
-                    updateActiveDetail(() => ({
-                      runAdjustments: {},
-                      notes: [],
-                    }));
                     activateSlicePin(activeSlicePin, true);
+                    window.requestAnimationFrame(() =>
+                      updateActiveDetail(() => ({
+                        runAdjustments: {},
+                        notes: [],
+                      })),
+                    );
                   }}
                 >
                   Reset View
@@ -8059,7 +8112,8 @@ export default function ModelViewer() {
           rebarPlanePreviews={displayRebarPlanePreviews}
           rebarSectionView={activeSectionView}
           detailMode={activeTab === "details"}
-          lockOrbit={activeTab === "details" || (activeTab === "slicing" && Boolean(activeSlicePin))}
+          lockOrbit={activeTab === "details"}
+          normalizeViewUpRequest={normalizeViewUpRequest}
           detailRunAdjustments={activeDetail.runAdjustments}
           detailNotes={activeDetail.notes}
           pendingDetailNoteText={pendingDetailNoteText}

@@ -144,6 +144,7 @@ type Props = {
   } | null;
   detailMode: boolean;
   lockOrbit: boolean;
+  normalizeViewUpRequest: number;
   detailRunAdjustments: Record<string, DetailRunAdjustment>;
   detailNotes: DetailNote[];
   pendingDetailNoteText: string | null;
@@ -185,6 +186,9 @@ type Props = {
 };
 
 type ScreenPoint = { x: number; y: number };
+
+const DETAIL_LANDING_LENGTH = 34;
+const DETAIL_TEXT_GAP = 7;
 
 type DetailDrag =
   | {
@@ -748,6 +752,7 @@ export default function PointCloudViewport({
   rebarSectionView,
   detailMode,
   lockOrbit,
+  normalizeViewUpRequest,
   detailRunAdjustments,
   detailNotes,
   pendingDetailNoteText,
@@ -938,6 +943,20 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
     state.camera.lookAt(state.controls.target);
     state.controls.update();
   }, [viewpointToApply]);
+
+  useEffect(() => {
+    const state = sceneRef.current;
+    if (!state || !normalizeViewUpRequest) return;
+    const viewDirection = state.controls.target.clone().sub(state.camera.position).normalize();
+    const localZ = new THREE.Vector3(0, 0, 1);
+    state.camera.up.copy(
+      Math.abs(viewDirection.dot(localZ)) > 0.9
+        ? new THREE.Vector3(0, 1, 0)
+        : localZ,
+    );
+    state.camera.lookAt(state.controls.target);
+    state.controls.update();
+  }, [normalizeViewUpRequest]);
 
   useEffect(() => {
     const state = sceneRef.current;
@@ -3795,10 +3814,31 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
     if (!detailMode || !rebarSectionView) return;
     const host = hostRef.current;
     if (!host?.clientWidth || !host.clientHeight) return;
+    const allDetailPoints = detailScreenGraphics.flatMap((candidate) => [
+      ...candidate.segments.flat(),
+      ...candidate.dots,
+    ]);
+    const center = allDetailPoints.length
+      ? {
+          x: allDetailPoints.reduce((sum, item) => sum + item.x, 0) / allDetailPoints.length,
+          y: allDetailPoints.reduce((sum, item) => sum + item.y, 0) / allDetailPoints.length,
+        }
+      : { x: host.clientWidth / 2, y: host.clientHeight / 2 };
+    const occupied: Array<{ left: number; right: number; top: number; bottom: number }> = [];
     for (const graphic of detailScreenGraphics) {
       if (!graphic.segments.length || graphic.dots.length >= 2) continue;
       const adjustment = detailRunAdjustments[graphic.run.id] ?? {};
-      if (adjustment.objectLabel && adjustment.objectLeader) continue;
+      if (adjustment.objectLabel && adjustment.objectLeader) {
+        const existing = projectDetailObjectPoint(
+          adjustment.objectLabel,
+          center,
+          host.clientWidth,
+          host.clientHeight,
+        );
+        const width = Math.max(70, `${graphic.run.name} @ ${graphic.run.spacingInches}\"`.length * 7);
+        occupied.push({ left: existing.x - width / 2, right: existing.x + width / 2, top: existing.y - 10, bottom: existing.y + 10 });
+        continue;
+      }
       const longest = graphic.segments.reduce(
         (best, segment, index) => {
           const distance = Math.hypot(
@@ -3819,12 +3859,36 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
         x: segment[0].x + (segment[1].x - segment[0].x) * targetDefinition.fraction,
         y: segment[0].y + (segment[1].y - segment[0].y) * targetDefinition.fraction,
       };
-      const label = {
-        x: target.x + (adjustment.labelOffset?.x ?? 54),
-        y: target.y + (adjustment.labelOffset?.y ?? -22),
-      };
-      const direction = label.x >= target.x ? 1 : -1;
-      const leader = { x: label.x - direction * 32, y: label.y };
+      const horizontalDirection = target.x >= center.x ? 1 : -1;
+      const verticalDirection = target.y >= center.y ? 1 : -1;
+      const labelWidth = Math.max(70, `${graphic.run.name} @ ${graphic.run.spacingInches}\"`.length * 7);
+      let landingStart = { x: target.x, y: target.y };
+      let label = { x: target.x, y: target.y };
+      let labelBounds = { left: 0, right: 0, top: 0, bottom: 0 };
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const pointerReach = 46 + attempt * 18;
+        const verticalNudge = attempt % 2 ? Math.ceil(attempt / 2) * 18 : 0;
+        landingStart = {
+          x: target.x + horizontalDirection * pointerReach,
+          y: target.y + verticalDirection * (pointerReach + verticalNudge),
+        };
+        label = {
+          x: landingStart.x + horizontalDirection * (DETAIL_LANDING_LENGTH + DETAIL_TEXT_GAP),
+          y: landingStart.y,
+        };
+        labelBounds = {
+          left: horizontalDirection > 0 ? label.x : label.x - labelWidth,
+          right: horizontalDirection > 0 ? label.x + labelWidth : label.x,
+          top: label.y - 10,
+          bottom: label.y + 10,
+        };
+        if (!occupied.some((item) =>
+          labelBounds.left < item.right && labelBounds.right > item.left &&
+          labelBounds.top < item.bottom && labelBounds.bottom > item.top
+        )) break;
+      }
+      occupied.push(labelBounds);
+      const leader = landingStart;
       const objectLabel = adjustment.objectLabel ?? detailPointAtScreen(label, host.clientWidth, host.clientHeight);
       const objectLeader = adjustment.objectLeader ?? detailPointAtScreen(leader, host.clientWidth, host.clientHeight);
       if (objectLabel && objectLeader) {
@@ -3871,11 +3935,19 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
     const dy = event.clientY - detailDrag.start.y;
     if (detailDrag.kind === "run-label" || detailDrag.kind === "run-leader") {
       const initial = detailDrag.initial;
-      const objectPoint = detailPointAtScreen(point, rect.width, rect.height);
+      const initialLabel = projectDetailObjectPoint(
+        initial.objectLabel,
+        { x: point.x - dx, y: point.y - dy },
+        rect.width,
+        rect.height,
+      );
+      const objectPoint = detailPointAtScreen(
+        { x: initialLabel.x + dx, y: initialLabel.y + dy },
+        rect.width,
+        rect.height,
+      );
       if (!objectPoint) return;
-      const next = detailDrag.kind === "run-label"
-        ? { ...initial, objectLabel: objectPoint }
-        : { ...initial, objectLeader: objectPoint };
+      const next = { ...initial, objectLabel: objectPoint };
       onDetailRunAdjustment(detailDrag.id, next);
       return;
     }
@@ -3904,12 +3976,19 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
         ...(objectTarget ? { objectTarget } : {}),
       });
     } else if (detailDrag.kind === "note-label") {
-      const objectLabel = detailPointAtScreen(point, rect.width, rect.height);
+      const initialLabel = projectDetailObjectPoint(
+        initial.objectLabel,
+        { x: initial.label.x * rect.width, y: initial.label.y * rect.height },
+        rect.width,
+        rect.height,
+      );
+      const nextLabel = { x: initialLabel.x + dx, y: initialLabel.y + dy };
+      const objectLabel = detailPointAtScreen(nextLabel, rect.width, rect.height);
       updateDetailNote(detailDrag.id, {
         ...initial,
         label: {
-          x: (initial.label.x * rect.width + dx) / rect.width,
-          y: (initial.label.y * rect.height + dy) / rect.height,
+          x: nextLabel.x / rect.width,
+          y: nextLabel.y / rect.height,
         },
         ...(objectLabel ? { objectLabel } : {}),
       });
@@ -3979,8 +4058,11 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
               rect.height,
             );
             if (!objectTarget) return;
-            const leaderPoint = { x: target.x + 46, y: target.y - 38 };
-            const labelPoint = { x: target.x + 104, y: target.y - 38 };
+            const leaderPoint = { x: target.x + 46, y: target.y - 46 };
+            const labelPoint = {
+              x: leaderPoint.x + DETAIL_LANDING_LENGTH + DETAIL_TEXT_GAP,
+              y: leaderPoint.y,
+            };
             const objectLeader = detailPointAtScreen(leaderPoint, rect.width, rect.height);
             const objectLabel = detailPointAtScreen(labelPoint, rect.width, rect.height);
             onPlaceDetailNote({
@@ -4053,9 +4135,12 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
                 y: pair[1].y + normal.y * offset,
               };
               const middle = {
-                x: (first.x + second.x) / 2,
-                y: (first.y + second.y) / 2 - 7,
+                x: (first.x + second.x) / 2 + normal.x * 7,
+                y: (first.y + second.y) / 2 + normal.y * 7,
               };
+              let textAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
+              if (textAngle > 90) textAngle -= 180;
+              if (textAngle < -90) textAngle += 180;
               return (
                 <g
                   key={graphic.run.id}
@@ -4081,7 +4166,13 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
                     markerStart="url(#detail-arrow)"
                     markerEnd="url(#detail-arrow)"
                   />
-                  <text x={middle.x} y={middle.y} textAnchor="middle">
+                  <text
+                    x={middle.x}
+                    y={middle.y}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    transform={`rotate(${textAngle} ${middle.x} ${middle.y})`}
+                  >
                     {label}
                   </text>
                 </g>
@@ -4133,24 +4224,40 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
             const textDirection = textPoint.x >= target.x ? 1 : -1;
             const textAnchor = textDirection > 0 ? "start" : "end";
             const landingEnd = {
-              x: textPoint.x - textDirection * 6,
+              x: textPoint.x - textDirection * DETAIL_TEXT_GAP,
               y: textPoint.y,
             };
-            const projectedLeader = projectDetailObjectPoint(
-              adjustment.objectLeader,
-              {
-                x: landingEnd.x - textDirection * Math.max(24, Math.abs(adjustment.leaderOffset?.x ?? 26)),
-                y: textPoint.y,
-              },
-              width,
-              height,
-            );
-            const leader = { x: projectedLeader.x, y: textPoint.y };
+            const leader = {
+              x: landingEnd.x - textDirection * DETAIL_LANDING_LENGTH,
+              y: textPoint.y,
+            };
+            const beginLabelDrag = (event: ReactPointerEvent<SVGElement>) => {
+              event.preventDefault();
+              event.stopPropagation();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              setDetailDrag({
+                kind: "run-label",
+                id: graphic.run.id,
+                start: { x: event.clientX, y: event.clientY },
+                initial: adjustment,
+              });
+            };
             return (
               <g key={graphic.run.id} className="detail-leader">
-                <polyline
-                  points={`${target.x},${target.y} ${leader.x},${leader.y} ${landingEnd.x},${landingEnd.y}`}
+                <line
+                  x1={target.x}
+                  y1={target.y}
+                  x2={leader.x}
+                  y2={leader.y}
                   markerStart="url(#detail-arrow)"
+                />
+                <line
+                  className="annotation-draggable detail-landing"
+                  x1={leader.x}
+                  y1={leader.y}
+                  x2={landingEnd.x}
+                  y2={landingEnd.y}
+                  onPointerDown={beginLabelDrag}
                 />
                 <text
                   className="annotation-draggable"
@@ -4158,16 +4265,7 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
                   y={textPoint.y}
                   textAnchor={textAnchor}
                   dominantBaseline="middle"
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    setDetailDrag({
-                      kind: "run-label",
-                      id: graphic.run.id,
-                      start: { x: event.clientX, y: event.clientY },
-                      initial: adjustment,
-                    });
-                  }}
+                  onPointerDown={beginLabelDrag}
                 >
                   {label}
                 </text>
@@ -4180,22 +4278,6 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
                     event.stopPropagation();
                     event.currentTarget.setPointerCapture(event.pointerId);
                     setDetailDrag({ kind: "run-target", id: graphic.run.id });
-                  }}
-                />
-                <circle
-                  className="detail-handle annotation-draggable"
-                  cx={leader.x}
-                  cy={leader.y}
-                  r="5"
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    setDetailDrag({
-                      kind: "run-leader",
-                      id: graphic.run.id,
-                      start: { x: event.clientX, y: event.clientY },
-                      initial: adjustment,
-                    });
                   }}
                 />
                 {graphic.lapDimensions.map((dimension, index) => {
@@ -4266,21 +4348,40 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
             const textDirection = label.x >= target.x ? 1 : -1;
             const textAnchor = textDirection > 0 ? "start" : "end";
             const landingEnd = {
-              x: label.x - textDirection * 6,
+              x: label.x - textDirection * DETAIL_TEXT_GAP,
               y: label.y,
             };
-            const projectedLeader = projectDetailObjectPoint(
-              note.objectLeader,
-              { x: note.leader.x * width, y: note.leader.y * height },
-              width,
-              height,
-            );
-            const leader = { x: projectedLeader.x, y: label.y };
+            const leader = {
+              x: landingEnd.x - textDirection * DETAIL_LANDING_LENGTH,
+              y: label.y,
+            };
+            const beginNoteLabelDrag = (event: ReactPointerEvent<SVGElement>) => {
+              event.preventDefault();
+              event.stopPropagation();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              setDetailDrag({
+                kind: "note-label",
+                id: note.id,
+                start: { x: event.clientX, y: event.clientY },
+                initial: note,
+              });
+            };
             return (
               <g key={note.id} className="detail-leader custom-detail-note">
-                <polyline
-                  points={`${target.x},${target.y} ${leader.x},${leader.y} ${landingEnd.x},${landingEnd.y}`}
+                <line
+                  x1={target.x}
+                  y1={target.y}
+                  x2={leader.x}
+                  y2={leader.y}
                   markerStart="url(#detail-arrow)"
+                />
+                <line
+                  className="annotation-draggable detail-landing"
+                  x1={leader.x}
+                  y1={leader.y}
+                  x2={landingEnd.x}
+                  y2={landingEnd.y}
+                  onPointerDown={beginNoteLabelDrag}
                 />
                 <text
                   className="annotation-draggable"
@@ -4288,16 +4389,7 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
                   y={label.y}
                   textAnchor={textAnchor}
                   dominantBaseline="middle"
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    setDetailDrag({
-                      kind: "note-label",
-                      id: note.id,
-                      start: { x: event.clientX, y: event.clientY },
-                      initial: note,
-                    });
-                  }}
+                  onPointerDown={beginNoteLabelDrag}
                 >
                   {note.text}
                 </text>
@@ -4317,35 +4409,37 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
                     });
                   }}
                 />
-                <circle
-                  className="detail-handle annotation-draggable"
-                  cx={leader.x}
-                  cy={leader.y}
-                  r="5"
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    setDetailDrag({
-                      kind: "note-leader",
-                      id: note.id,
-                      start: { x: event.clientX, y: event.clientY },
-                      initial: note,
-                    });
-                  }}
-                />
               </g>
             );
           })}
           {pendingDetailNoteText && detailNoteCursor && (() => {
             const target = detailNoteCursor;
-            const label = { x: target.x + 104, y: target.y - 38 };
-            const leader = { x: target.x + 46, y: label.y };
-            const landingEnd = { x: label.x - 6, y: label.y };
+            const label = {
+              x: target.x + DETAIL_LANDING_LENGTH + DETAIL_TEXT_GAP + 46,
+              y: target.y - 46,
+            };
+            const landingEnd = {
+              x: label.x - DETAIL_TEXT_GAP,
+              y: label.y,
+            };
+            const leader = {
+              x: landingEnd.x - DETAIL_LANDING_LENGTH,
+              y: label.y,
+            };
             return (
               <g className="detail-leader pending-detail-note" aria-hidden="true">
-                <polyline
-                  points={`${target.x},${target.y} ${leader.x},${leader.y} ${landingEnd.x},${landingEnd.y}`}
+                <line
+                  x1={target.x}
+                  y1={target.y}
+                  x2={leader.x}
+                  y2={leader.y}
                   markerStart="url(#detail-arrow)"
+                />
+                <line
+                  x1={leader.x}
+                  y1={leader.y}
+                  x2={landingEnd.x}
+                  y2={landingEnd.y}
                 />
                 <text x={label.x} y={label.y} dominantBaseline="middle">
                   {pendingDetailNoteText}

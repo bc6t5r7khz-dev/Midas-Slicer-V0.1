@@ -27,7 +27,7 @@ test("server-renders the QuickBar3D application", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>QuickBar3D v64<\/title>/i);
+  assert.match(html, /<title>QuickBar3D v65<\/title>/i);
   assert.match(html, />Setup</);
   assert.match(html, />Import</);
   assert.match(html, /Define Floor Plane/);
@@ -67,6 +67,9 @@ test("includes plane-based rebar and quantity export workflows", async () => {
   assert.match(viewer, /Create Bar Run/);
   assert.match(viewer, /Reinforcing Details/);
   assert.match(viewport, /Editable reinforcing detail annotations/);
+  assert.match(viewport, /DETAIL_LANDING_LENGTH = 34/);
+  assert.match(viewport, /className="annotation-draggable detail-landing"/);
+  assert.match(viewport, /transform=\{`rotate\(\$\{textAngle\}/);
   assert.match(viewer, /Reset View/);
   assert.match(viewer, /activeTab === "details"/);
   assert.match(viewer, /Splayed runs and varying-length runs cannot be combined/);
@@ -144,6 +147,9 @@ test("includes plane-based rebar and quantity export workflows", async () => {
     /\.workflow-tabs[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/,
   );
   assert.match(styles, /\.detail-annotation-layer/);
+  assert.match(styles, /user-select: none/);
+  assert.match(viewer, /lockOrbit=\{activeTab === "details"\}/);
+  assert.match(viewer, /activateSlicePin\(pin, Boolean\(pin\.viewpoint\)\)/);
   assert.match(
     styles,
     /\.combined-slicing \.plane-list-actions,[\s\S]*\.combined-slicing \.pin-management-actions[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/,

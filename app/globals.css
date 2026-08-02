@@ -3806,11 +3806,18 @@ input[type="range"]::-moz-range-thumb {
   stroke-width: 4px;
   paint-order: stroke;
   font: 700 12px/1 var(--mono);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .detail-annotation-layer .annotation-draggable {
   pointer-events: auto;
   cursor: move;
+}
+
+.detail-annotation-layer .detail-landing {
+  stroke-width: 2;
+  pointer-events: stroke;
 }
 
 .detail-handle {
