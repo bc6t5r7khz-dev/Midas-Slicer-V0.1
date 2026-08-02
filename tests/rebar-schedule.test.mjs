@@ -3,6 +3,9 @@ import test from "node:test";
 import ts from "typescript";
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+
+const nodeRequire = createRequire(import.meta.url);
 
 const cache = new Map();
 const loadModule = (name) => {
@@ -22,12 +25,15 @@ const loadModule = (name) => {
   vm.runInNewContext(compiled, {
     module,
     exports: module.exports,
-    require: (request) => loadModule(request.replace(/^\.\//, "")),
+    require: (request) => request.startsWith("./")
+      ? loadModule(request.replace(/^\.\//, ""))
+      : nodeRequire(request),
   });
   return module.exports;
 };
 
 const {
+  buildRebarScheduleWorkbookXlsx,
   buildRebarScheduleWorkbookXml,
   classifyNhdotBar,
   createRebarScheduleRows,
@@ -173,4 +179,17 @@ test("creates a formula-driven multi-sheet hand-calculation workbook", () => {
   assert.match(workbook, /Reference!R3C1:R13C2/);
   assert.match(workbook, /#5101E/);
   assert.match(workbook, />N8</);
+
+  const xlsx = buildRebarScheduleWorkbookXlsx(rows, "Abutment B.mct");
+  assert.equal(xlsx[0], 0x50, "xlsx begins with a ZIP signature");
+  assert.equal(xlsx[1], 0x4b, "xlsx begins with a ZIP signature");
+  const { unzipSync, strFromU8 } = nodeRequire("fflate");
+  const files = unzipSync(xlsx);
+  assert.ok(files["[Content_Types].xml"]);
+  assert.ok(files["xl/workbook.xml"]);
+  assert.ok(files["xl/styles.xml"]);
+  assert.ok(files["xl/worksheets/sheet1.xml"]);
+  assert.ok(files["xl/worksheets/sheet4.xml"]);
+  assert.match(strFromU8(files["xl/workbook.xml"]), /name="Bar Schedule"/);
+  assert.match(strFromU8(files["xl/worksheets/sheet2.xml"]), /<f>C4\*D4<\/f>/);
 });

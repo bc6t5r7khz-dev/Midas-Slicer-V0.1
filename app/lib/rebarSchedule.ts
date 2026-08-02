@@ -1,6 +1,7 @@
 import { rebarInstanceLength } from "./rebarAdvanced";
 import { rebarBendStandard } from "./rebarStandards";
 import type { RebarLine, RebarRun, Vec3 } from "./types";
+import { strToU8, zipSync } from "fflate";
 
 export const NHDOT_REBAR_SOURCE =
   "https://gis.dot.nh.gov/plan/43444.POP.pdf";
@@ -527,4 +528,189 @@ export function buildRebarScheduleWorkbookXml(
 <Worksheet ss:Name="Classification Review"><Table>${columns([95,85,70,75,55,55,55,70,185,185,90])}${rowXml([stringCell(`${title} - Automatic Bend Classification Review`, "Title")])}${rowXml([stringCell("Ambiguous and Nonstandard rows are intentionally not forced into an NHDOT bend.", "Wrap")])}${headerRow(reviewHeaders)}${reviewRows}</Table>${worksheetOptions}</Worksheet>
 <Worksheet ss:Name="Reference"><Table>${columns([60,90,105,105])}${rowXml([stringCell("NHDOT Reinforcing Reference", "Title")])}${headerRow(["Bar #", "Unit Wt. lb/ft"])}${referenceRows}${rowXml([stringCell("Source"), stringCell(NHDOT_REBAR_SOURCE, "Wrap")])}${rowXml([stringCell("Bar #", "Header"), stringCell("Unit Wt. lb/ft", "Header"), stringCell("Total Weight (lb)", "Header"), stringCell("Total Length (ft)", "Header")])}${summaryRows}</Table>${worksheetOptions}</Worksheet>
 </Workbook>`;
+}
+
+type XlsxCell = {
+  value?: string | number;
+  formula?: string;
+  cached?: number;
+  style?: number;
+};
+
+const xlsxColumnName = (index: number) => {
+  let value = index + 1;
+  let name = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    value = Math.floor((value - 1) / 26);
+  }
+  return name;
+};
+
+const xlsxCellXml = (cell: XlsxCell, rowIndex: number, columnIndex: number) => {
+  const reference = `${xlsxColumnName(columnIndex)}${rowIndex}`;
+  const style = cell.style ? ` s="${cell.style}"` : "";
+  if (cell.formula) {
+    return `<c r="${reference}"${style}><f>${escapeXml(cell.formula)}</f><v>${Number.isFinite(cell.cached) ? cell.cached : 0}</v></c>`;
+  }
+  if (typeof cell.value === "number") {
+    return `<c r="${reference}"${style}><v>${Number.isFinite(cell.value) ? cell.value : 0}</v></c>`;
+  }
+  return `<c r="${reference}" t="inlineStr"${style}><is><t xml:space="preserve">${escapeXml(String(cell.value ?? ""))}</t></is></c>`;
+};
+
+const xlsxRowXml = (cells: XlsxCell[], rowIndex: number) =>
+  `<row r="${rowIndex}">${cells.map((cell, columnIndex) => xlsxCellXml(cell, rowIndex, columnIndex)).join("")}</row>`;
+
+const xlsxSheetXml = (rows: XlsxCell[][], widths: number[]) => {
+  const lastColumn = xlsxColumnName(Math.max(0, widths.length - 1));
+  const dimension = `A1:${lastColumn}${Math.max(1, rows.length)}`;
+  const columns = widths
+    .map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${Math.max(6, width / 6.5).toFixed(2)}" customWidth="1"/>`)
+    .join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<dimension ref="${dimension}"/>
+<sheetViews><sheetView workbookViewId="0"><pane ySplit="3" topLeftCell="A4" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A4" sqref="A4"/></sheetView></sheetViews>
+<sheetFormatPr defaultRowHeight="15"/>
+<cols>${columns}</cols>
+<sheetData>${rows.map((row, index) => xlsxRowXml(row, index + 1)).join("")}</sheetData>
+<pageMargins left="0.35" right="0.35" top="0.5" bottom="0.5" header="0.3" footer="0.3"/>
+<pageSetup orientation="landscape"/>
+</worksheet>`;
+};
+
+const xlsxStylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<numFmts count="3"><numFmt numFmtId="164" formatCode="0.0"/><numFmt numFmtId="165" formatCode="0.00"/><numFmt numFmtId="166" formatCode="0.000"/></numFmts>
+<fonts count="3"><font><sz val="9"/><name val="Arial"/></font><font><b/><sz val="14"/><name val="Arial"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="9"/><name val="Arial"/></font></fonts>
+<fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF111111"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF8D8"/><bgColor indexed="64"/></patternFill></fill></fills>
+<borders count="4"><border/><border><left/><right/><top/><bottom style="thin"><color rgb="FF808080"/></bottom><diagonal/></border><border><left style="thin"/><right style="thin"/><top style="medium"/><bottom style="medium"/><diagonal/></border><border><left/><right/><top style="double"/><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="16">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="2" fillId="2" borderId="2" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"/>
+<xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"/>
+<xf numFmtId="166" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"/>
+<xf numFmtId="1" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"/>
+<xf numFmtId="165" fontId="0" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1"/>
+<xf numFmtId="164" fontId="0" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1"/>
+<xf numFmtId="166" fontId="0" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1"/>
+<xf numFmtId="1" fontId="0" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="3" xfId="0" applyBorder="1" applyFont="1"/>
+<xf numFmtId="165" fontId="0" fillId="3" borderId="3" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyFont="1"/>
+</cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+
+/** Build a genuine Office Open XML workbook rather than an XML file with an .xls extension. */
+export function buildRebarScheduleWorkbookXlsx(
+  rows: RebarScheduleRow[],
+  projectName: string,
+) {
+  const title = projectName.replace(/\.[^.]+$/, "") || "Reinforcing Steel";
+  const header = (labels: string[]): XlsxCell[] => labels.map((value) => ({ value, style: 2 }));
+  const schedule: XlsxCell[][] = [
+    [{ value: `${title} - Bar Summary`, style: 1 }],
+    [{ value: "NHDOT standard bend dimensions; blank Type indicates a straight bar.", style: 5 }],
+    header(["Mark", "Size", "Length (ft)", "# Pieces", "Type", ...LETTERS, "Coating", "Item #"]),
+    ...rows.map((row) => [
+      { value: row.mark, style: 3 }, { value: `#${row.barNumber}`, style: 4 }, { value: row.lengthFeet, style: 7 },
+      { value: row.quantity, style: 9 }, { value: row.type, style: 4 },
+      ...LETTERS.map((letter): XlsxCell => row.legFeet[letter] === undefined ? ({ value: "", style: 3 }) : ({ value: row.legFeet[letter], style: 6 })),
+      { value: row.coating, style: 4 }, { value: "", style: 3 },
+    ]),
+  ];
+
+  const quantities: XlsxCell[][] = [
+    [{ value: `${title} - Reinforcing Steel Quantities`, style: 1 }],
+    [{ value: "Yellow cells contain auditable Excel formulas.", style: 5 }],
+    header(["Mark", "Size", "Length From Above (ft)", "# Pieces", "Total Length (ft)", "Unit Wt. (lb/ft)", "Total Weight (lb)", "Classification"]),
+    ...rows.map((row, index) => {
+      const excelRow = index + 4;
+      const totalLength = row.lengthFeet * row.quantity;
+      const unitWeight = NHDOT_UNIT_WEIGHTS_LB_PER_FT[row.barNumber] ?? 0;
+      return [
+        { value: row.mark, style: 3 }, { value: `#${row.barNumber}`, style: 4 },
+        { formula: `'Bar Schedule'!C${excelRow}`, cached: row.lengthFeet, style: 10 },
+        { formula: `'Bar Schedule'!D${excelRow}`, cached: row.quantity, style: 13 },
+        { formula: `C${excelRow}*D${excelRow}`, cached: totalLength, style: 10 },
+        { formula: `IFERROR(VLOOKUP(B${excelRow},Reference!$A$3:$B$13,2,FALSE),0)`, cached: unitWeight, style: 12 },
+        { formula: `E${excelRow}*F${excelRow}`, cached: totalLength * unitWeight, style: 10 },
+        { value: row.confidence, style: 4 },
+      ];
+    }),
+  ];
+  const quantityTotalRow = quantities.length + 1;
+  const firstDataRow = 4;
+  const lastDataRow = quantityTotalRow - 1;
+  const sumFormula = (column: string) => rows.length ? `SUM(${column}${firstDataRow}:${column}${lastDataRow})` : "0";
+  quantities.push([
+    { value: "TOTAL", style: 14 }, { value: "", style: 14 }, { value: "", style: 14 }, { value: "", style: 14 },
+    { formula: sumFormula("E"), cached: rows.reduce((sum, row) => sum + row.lengthFeet * row.quantity, 0), style: 15 },
+    { value: "", style: 14 },
+    { formula: sumFormula("G"), cached: rows.reduce((sum, row) => sum + row.lengthFeet * row.quantity * (NHDOT_UNIT_WEIGHTS_LB_PER_FT[row.barNumber] ?? 0), 0), style: 15 },
+    { value: "", style: 14 },
+  ]);
+
+  const review: XlsxCell[][] = [
+    [{ value: `${title} - Automatic Bend Classification Review`, style: 1 }],
+    [{ value: "Ambiguous and Nonstandard rows are intentionally not forced into an NHDOT bend.", style: 5 }],
+    header(["Source Run", "Mark", "Suggested Type", "Confidence", "Score", "Mirrored", "Reversed", "Clean Vertices", "Cleanup Performed", "Matcher Notes", "Run Tags"]),
+    ...rows.map((row) => [
+      { value: row.sourceRun, style: 3 }, { value: row.mark, style: 3 }, { value: row.type, style: 3 }, { value: row.confidence, style: 3 },
+      { value: row.score, style: 6 }, { value: row.mirrored ? "Yes" : "No", style: 4 }, { value: row.reversed ? "Yes" : "No", style: 4 },
+      { value: row.cleanedVertexCount, style: 9 }, { value: row.cleanup.join("; "), style: 5 }, { value: row.notes.join("; "), style: 5 },
+      { value: row.tags.join(", "), style: 5 },
+    ]),
+  ];
+
+  const weights = Object.entries(NHDOT_UNIT_WEIGHTS_LB_PER_FT);
+  const reference: XlsxCell[][] = [
+    [{ value: "NHDOT Reinforcing Reference", style: 1 }],
+    header(["Bar #", "Unit Wt. lb/ft"]),
+    ...weights.map(([barNumber, weight]): XlsxCell[] => [{ value: `#${barNumber}`, style: 4 }, { value: weight, style: 8 }]),
+    [{ value: "Source", style: 3 }, { value: NHDOT_REBAR_SOURCE, style: 5 }],
+    header(["Bar #", "Unit Wt. lb/ft", "Total Weight (lb)", "Total Length (ft)"]),
+    ...weights.map(([barNumber, weight], index): XlsxCell[] => {
+      const excelRow = weights.length + 5 + index;
+      const totalWeight = rows.reduce((sum, row) => row.barNumber === barNumber ? sum + row.lengthFeet * row.quantity * weight : sum, 0);
+      const totalLength = rows.reduce((sum, row) => row.barNumber === barNumber ? sum + row.lengthFeet * row.quantity : sum, 0);
+      const quantityRangeEnd = Math.max(firstDataRow, lastDataRow);
+      return [
+        { value: `#${barNumber}`, style: 4 }, { value: weight, style: 8 },
+        { formula: rows.length ? `SUMIF(Quantities!$B$4:$B$${quantityRangeEnd},A${excelRow},Quantities!$G$4:$G$${quantityRangeEnd})` : "0", cached: totalWeight, style: 10 },
+        { formula: rows.length ? `SUMIF(Quantities!$B$4:$B$${quantityRangeEnd},A${excelRow},Quantities!$E$4:$E$${quantityRangeEnd})` : "0", cached: totalLength, style: 10 },
+      ];
+    }),
+  ];
+
+  const sheets = [
+    { name: "Bar Schedule", rows: schedule, widths: [80,45,65,55,50,...LETTERS.map(() => 42),65,65] },
+    { name: "Quantities", rows: quantities, widths: [90,48,90,60,85,80,90,80] },
+    { name: "Classification Review", rows: review, widths: [95,85,70,75,55,55,55,70,185,185,90] },
+    { name: "Reference", rows: reference, widths: [60,90,105,105] },
+  ];
+  const sheetOverrides = sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("");
+  const workbookSheets = sheets.map((sheet, index) => `<sheet name="${escapeXml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join("");
+  const workbookRelationships = sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join("");
+  const files: Record<string, Uint8Array> = {
+    "[Content_Types].xml": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheetOverrides}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`),
+    "_rels/.rels": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`),
+    "docProps/core.xml": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${escapeXml(title)} Reinforcing Bar Schedule</dc:title><dc:creator>MCT Section Lab</dc:creator></cp:coreProperties>`),
+    "docProps/app.xml": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>MCT Section Lab</Application></Properties>`),
+    "xl/workbook.xml": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${workbookSheets}</sheets><calcPr calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"/></workbook>`),
+    "xl/_rels/workbook.xml.rels": strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${workbookRelationships}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`),
+    "xl/styles.xml": strToU8(xlsxStylesXml),
+  };
+  sheets.forEach((sheet, index) => {
+    files[`xl/worksheets/sheet${index + 1}.xml`] = strToU8(xlsxSheetXml(sheet.rows, sheet.widths));
+  });
+  return zipSync(files, { level: 6 });
 }

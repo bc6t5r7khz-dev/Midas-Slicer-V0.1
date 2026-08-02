@@ -27,7 +27,7 @@ import {
   pointAlongRebarPath,
 } from "../lib/rebarAdvanced";
 import {
-  buildRebarScheduleWorkbookXml,
+  buildRebarScheduleWorkbookXlsx,
   createRebarScheduleRows,
 } from "../lib/rebarSchedule";
 import {
@@ -2532,10 +2532,12 @@ export default function ModelViewer() {
       }),
       inchesPerModelUnit,
     );
-    const workbook = buildRebarScheduleWorkbookXml(scheduleRows, fileName);
+    const workbook = buildRebarScheduleWorkbookXlsx(scheduleRows, fileName);
     downloadBlob(
-      new Blob([workbook], { type: "application/vnd.ms-excel" }),
-      `${fileName.replace(/\.[^.]+$/, "") || "rebar"}-bar-schedule.xls`,
+      new Blob([workbook.buffer as ArrayBuffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+      `${fileName.replace(/\.[^.]+$/, "") || "rebar"}-bar-schedule.xlsx`,
     );
     setStatus("NHDOT-style Excel bar schedule and quantities exported.");
   };
