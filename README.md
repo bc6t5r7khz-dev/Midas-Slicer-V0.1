@@ -1,4 +1,4 @@
-# QuickBar3D v66
+# QuickBar3D v67
 
 A local-first Three.js application for inspecting MIDAS Civil MCT models,
 defining local coordinates and volumes, slicing solid geometry, and laying out

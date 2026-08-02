@@ -145,3 +145,75 @@ test("suppresses a depth leg whose visible slant is within ten degrees of horizo
   assert.equal(result.circles.length, 2);
   assert.equal(result.projectedLines.length, 1);
 });
+
+test("does not draw a mixed bar wholly in front of the selected section", () => {
+  const result = sectionRebarGeometry(
+    [
+      {
+        id: "unrelated-front-bar",
+        points: [
+          { x: 0, y: 10, z: 50 },
+          { x: 0, y: 10, z: 60 },
+          { x: 0, y: 0, z: 60 },
+          { x: 0, y: -10, z: 75 },
+        ],
+      },
+    ],
+    origin,
+    normal,
+    12,
+  );
+
+  assert.equal(result.mixed, false);
+  assert.equal(result.circles.length, 0);
+  assert.equal(result.projectedLines.length, 0);
+});
+
+test("does not project a planar bar from the front side of a horizontal cut", () => {
+  const result = sectionRebarGeometry(
+    [
+      {
+        id: "above-horizontal-cut",
+        points: [
+          { x: 0, y: 0, z: 5 },
+          { x: 10, y: 0, z: 5 },
+        ],
+      },
+    ],
+    origin,
+    normal,
+    12,
+  );
+
+  assert.equal(result.circles.length, 0);
+  assert.equal(result.projectedLines.length, 0);
+});
+
+test("keeps only the longer of overlapping elevation legs", () => {
+  const result = sectionRebarGeometry(
+    [
+      {
+        id: "side-on-u-bar",
+        points: [
+          { x: 0, y: 10, z: -5 },
+          { x: 0, y: -10, z: -5 },
+          { x: 0, y: -10, z: 5 },
+          { x: 0, y: 8, z: 5 },
+        ],
+      },
+    ],
+    origin,
+    normal,
+    12,
+  );
+
+  assert.equal(result.mixed, true);
+  assert.equal(result.projectedLines.length, 1);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.projectedLines[0])),
+    {
+      start: { x: 0, y: 10, z: 0 },
+      end: { x: 0, y: -10, z: 0 },
+    },
+  );
+});

@@ -2442,6 +2442,15 @@ export default function ModelViewer() {
     );
   };
 
+  const detailInstancesForRun = (run: RebarRun) => {
+    if (!inchesPerModelUnit) return [];
+    return generateRebarInstances(run, {
+      lapOffsetModelUnits: run.lapOffsetInches
+        ? run.lapOffsetInches / inchesPerModelUnit
+        : 0,
+    });
+  };
+
   const exportActiveSectionDxf = () => {
     if (!activeSectionView || !inchesPerModelUnit || !activeSlicePin) {
       setError("Select a saved slice before exporting a section DXF.");
@@ -2493,7 +2502,7 @@ export default function ModelViewer() {
     >();
     rebarRuns.forEach((run) => {
       const standard = rebarBendStandard(run.barNumber);
-      const candidates = bentInstancesForRun(run).map((instance, index) => {
+      const candidates = detailInstancesForRun(run).map((instance, index) => {
         const points = instance.flatMap((line) => line.points);
         const distance = points.reduce(
           (closest, point) => Math.min(
@@ -2638,14 +2647,18 @@ export default function ModelViewer() {
           ),
         );
         if (graphic.mixed && graphic.representativeTarget) {
+          const target = toSection(graphic.representativeTarget);
+          const along =
+            (target.x - dimensionStart.x) * (dx / magnitude) +
+            (target.y - dimensionStart.y) * (dy / magnitude);
           entities.push(
             dxfLine(
               {
-                x: (dimensionStart.x + dimensionEnd.x) / 2,
-                y: (dimensionStart.y + dimensionEnd.y) / 2,
+                x: dimensionStart.x + (dx / magnitude) * along,
+                y: dimensionStart.y + (dy / magnitude) * along,
                 z: 0,
               },
-              toSection(graphic.representativeTarget),
+              target,
               "ANNOTATIONS",
             ),
           );

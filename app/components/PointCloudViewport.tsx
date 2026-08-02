@@ -849,6 +849,11 @@ const scaleVec = (value: Vec3, amount: number): Vec3 => ({
   z: value.z * amount,
 });
 const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
+const crossVec = (first: Vec3, second: Vec3): Vec3 => ({
+  x: first.y * second.z - first.z * second.y,
+  y: first.z * second.x - first.x * second.z,
+  z: first.x * second.y - first.y * second.x,
+});
   const [detailDrag, setDetailDrag] = useState<DetailDrag | null>(null);
 
   nodesRef.current = nodes;
@@ -2182,6 +2187,25 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
     return generated;
   }, [basis, inchesPerModelUnit, rebarPlanes, rebarRuns]);
 
+  // Detail drawings use the sharp bar shape on its original drawing plane.
+  // Splay changes where each bar is anchored, but should not skew the apparent
+  // shape when that run is viewed in elevation.
+  const sectionRebarInstances = useMemo(() => {
+    const generated = new Map<string, RebarLine[][]>();
+    for (const run of rebarRuns) {
+      generated.set(
+        run.id,
+        generateRebarInstances(run, {
+          lapOffsetModelUnits:
+            inchesPerModelUnit && run.lapOffsetInches
+              ? run.lapOffsetInches / inchesPerModelUnit
+              : 0,
+        }),
+      );
+    }
+    return generated;
+  }, [inchesPerModelUnit, rebarRuns]);
+
   const sectionRebarGraphics = useMemo(() => {
     if (!rebarSectionView) return null;
     type Graphic = {
@@ -2190,6 +2214,7 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
       lapDimensions: LapDimension[];
       mixed: boolean;
       dimensionRange: [Vec3, Vec3] | null;
+      dimensionOffsetReference: Vec3 | null;
       representativeTarget: Vec3 | null;
     };
     const raw = new Map<string, Graphic>();
@@ -2213,9 +2238,10 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
         lapDimensions: [],
         mixed: false,
         dimensionRange: null,
+        dimensionOffsetReference: null,
         representativeTarget: null,
       };
-      const candidates = (generatedRebarInstances.get(run.id) ?? []).map(
+      const candidates = (sectionRebarInstances.get(run.id) ?? []).map(
         (instance, index) => {
           const points = instance.flatMap((line) => line.points);
           const signedDistances = points.map((point) =>
@@ -2226,17 +2252,13 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
               Math.abs(distance) < Math.abs(closest) ? distance : closest,
             signedDistances[0] ?? 0,
           );
-          const sectionNormal =
-            closestSignedDistance > 0
-              ? scaleVec(rebarSectionView.normal, -1)
-              : rebarSectionView.normal;
           return {
             index,
             distance: Math.abs(closestSignedDistance),
             section: sectionRebarGeometry(
               instance,
               rebarSectionView.origin,
-              sectionNormal,
+              rebarSectionView.normal,
               rebarSectionView.throwDepthModelUnits,
             ),
           };
@@ -2295,6 +2317,16 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
           const projectedEnd = projectToSection(pathEnd);
           if (lengthVec(subtractVec(projectedEnd, projectedStart)) > tolerance) {
             graphic.dimensionRange = [projectedStart, projectedEnd];
+            const direction = normalize(
+              subtractVec(projectedEnd, projectedStart),
+            );
+            graphic.dimensionOffsetReference = addVec(
+              projectedStart,
+              scaleVec(
+                normalize(crossVec(rebarSectionView.normal, direction)),
+                12 / Math.max(inchesPerModelUnit, 1e-9),
+              ),
+            );
           }
         }
         graphic.representativeTarget =
@@ -2383,10 +2415,10 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
     return result;
   }, [
     allNodes,
-    generatedRebarInstances,
     inchesPerModelUnit,
     rebarRuns,
     rebarSectionView,
+    sectionRebarInstances,
     tolerance,
   ]);
 
@@ -2419,6 +2451,7 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
         lapDimensions: [],
         mixed: false,
         dimensionRange: null,
+        dimensionOffsetReference: null,
         representativeTarget: null,
       };
       return {
@@ -2432,6 +2465,15 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
         dimensionRange: graphic.dimensionRange
           ? [project(graphic.dimensionRange[0]), project(graphic.dimensionRange[1])] as [ScreenPoint, ScreenPoint]
           : null,
+        dimensionOffsetPixels:
+          graphic.dimensionRange && graphic.dimensionOffsetReference
+            ? Math.hypot(
+                project(graphic.dimensionOffsetReference).x -
+                  project(graphic.dimensionRange[0]).x,
+                project(graphic.dimensionOffsetReference).y -
+                  project(graphic.dimensionRange[0]).y,
+              )
+            : null,
         representativeTarget: graphic.representativeTarget
           ? project(graphic.representativeTarget)
           : null,
@@ -4182,7 +4224,9 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
               const magnitude = Math.hypot(dx, dy) || 1;
               let normal = { x: -dy / magnitude, y: dx / magnitude };
               if (normal.y > 0) normal = { x: -normal.x, y: -normal.y };
-              const offset = 32 - (adjustment.dimensionOffset ?? 0);
+              const offset =
+                (graphic.dimensionOffsetPixels ?? 32) -
+                (adjustment.dimensionOffset ?? 0);
               const first = {
                 x: pair[0].x + normal.x * offset,
                 y: pair[0].y + normal.y * offset,
@@ -4195,6 +4239,17 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
                 x: (first.x + second.x) / 2 + normal.x * 7,
                 y: (first.y + second.y) / 2 + normal.y * 7,
               };
+              const witnessStart = graphic.representativeTarget
+                ? (() => {
+                    const along =
+                      (graphic.representativeTarget.x - first.x) * (dx / magnitude) +
+                      (graphic.representativeTarget.y - first.y) * (dy / magnitude);
+                    return {
+                      x: first.x + (dx / magnitude) * along,
+                      y: first.y + (dy / magnitude) * along,
+                    };
+                  })()
+                : null;
               let textAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
               if (textAngle > 90) textAngle -= 180;
               if (textAngle < -90) textAngle += 180;
@@ -4223,11 +4278,11 @@ const lengthVec = (value: Vec3) => Math.hypot(value.x, value.y, value.z);
                     markerStart="url(#detail-arrow)"
                     markerEnd="url(#detail-arrow)"
                   />
-                  {graphic.mixed && graphic.representativeTarget && (
+                  {graphic.mixed && graphic.representativeTarget && witnessStart && (
                     <line
                       className="detail-dimension-witness"
-                      x1={(first.x + second.x) / 2}
-                      y1={(first.y + second.y) / 2}
+                      x1={witnessStart.x}
+                      y1={witnessStart.y}
                       x2={graphic.representativeTarget.x}
                       y2={graphic.representativeTarget.y}
                     />

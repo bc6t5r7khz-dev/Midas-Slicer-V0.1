@@ -57,6 +57,54 @@ const projectToPlane = (
   normal: Vec3,
 ) => subtract(point, scale(normal, dot(subtract(point, planeOrigin), normal)));
 
+const removeOverlappingShorterLines = (
+  lines: SectionLine[],
+  tolerance: number,
+) => {
+  const ordered = [...lines].sort(
+    (first, second) =>
+      length(subtract(second.end, second.start)) -
+      length(subtract(first.end, first.start)),
+  );
+  const kept: SectionLine[] = [];
+  for (const candidate of ordered) {
+    const candidateDelta = subtract(candidate.end, candidate.start);
+    const candidateLength = length(candidateDelta);
+    if (candidateLength <= tolerance) continue;
+    const candidateDirection = normalize(candidateDelta);
+    const hiddenByLonger = kept.some((longer) => {
+      const longerDelta = subtract(longer.end, longer.start);
+      const longerLength = length(longerDelta);
+      if (longerLength + tolerance < candidateLength) return false;
+      const longerDirection = normalize(longerDelta);
+      if (Math.abs(dot(candidateDirection, longerDirection)) < 0.9995) {
+        return false;
+      }
+      const distanceFromLonger = (point: Vec3) => {
+        const offset = subtract(point, longer.start);
+        return length(
+          subtract(offset, scale(longerDirection, dot(offset, longerDirection))),
+        );
+      };
+      const lineTolerance = Math.max(tolerance * 20, longerLength * 1e-5);
+      if (
+        distanceFromLonger(candidate.start) > lineTolerance ||
+        distanceFromLonger(candidate.end) > lineTolerance
+      ) {
+        return false;
+      }
+      const first = dot(subtract(candidate.start, longer.start), longerDirection);
+      const second = dot(subtract(candidate.end, longer.start), longerDirection);
+      const overlap =
+        Math.min(longerLength, Math.max(first, second)) -
+        Math.max(0, Math.min(first, second));
+      return overlap > tolerance;
+    });
+    if (!hiddenByLonger) kept.push(candidate);
+  }
+  return kept;
+};
+
 const clipSegmentToDepth = (
   start: Vec3,
   end: Vec3,
@@ -156,6 +204,29 @@ export function sectionRebarGeometry(
         length(subtract(segment.projectedEnd, segment.projectedStart)) > tolerance,
     );
 
+  const relevantToCut = segments.some((segment) => {
+    const distanceDelta = segment.endDistance - segment.startDistance;
+    const crossesCut =
+      Math.abs(distanceDelta) > tolerance &&
+      ((segment.startDistance <= tolerance &&
+        segment.endDistance >= -tolerance) ||
+        (segment.endDistance <= tolerance &&
+          segment.startDistance >= -tolerance));
+    return Boolean(
+      crossesCut ||
+        clipSegmentToDepth(
+          segment.start,
+          segment.end,
+          segment.startDistance,
+          segment.endDistance,
+          depth,
+        ),
+    );
+  });
+  if (!relevantToCut) {
+    return { projectedLines, circles, mixed: false };
+  }
+
   // Elevation details commonly contain a leg in the drawing plane followed by
   // a leg travelling into the page. For that mixed case, project the complete
   // representative bar rather than clipping it at the section throw depth.
@@ -212,7 +283,11 @@ export function sectionRebarGeometry(
         });
       }
     }
-    return { projectedLines, circles, mixed };
+    return {
+      projectedLines: removeOverlappingShorterLines(projectedLines, tolerance),
+      circles,
+      mixed,
+    };
   }
 
   for (const segment of segments) {
